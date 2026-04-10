@@ -181,7 +181,7 @@ class TaobaoScraper:
                 let imgs = Array.from(document.querySelectorAll('.tb-gallery img, .mainPic--pic--1lJc90o, #J_ImgBooth, .gallery--img--1X_QkP3, div[class*="mainPic"] img, div[class*="gallery"] img'));
                 return imgs.map(img => img.src).filter(src => src && !src.includes('lazy') && !src.includes('10x10.jpg'));
             }""")
-            main_imgs = list(set([self.format_url(src) for src in main_imgs]))[:6]
+            main_imgs = list(set([self.format_url(src) for src in main_imgs]))
 
             # 主图视频：网络拦截 + JS 双策略
             video_urls_set = set(captured_videos)
@@ -374,7 +374,11 @@ class TaobaoScraper:
             }
             resp = page.context.request.get(url, headers=headers, timeout=15000)
             if resp.ok:
-                img = Image.open(BytesIO(resp.body()))
+                body = resp.body()
+                if len(body) < 10 * 1024:
+                    self.log("  --> 图片小于 10KB，视为无效图片并忽略")
+                    return
+                img = Image.open(BytesIO(body))
                 if img.mode in ("RGBA", "P"):
                     img = img.convert("RGB")
                 if not save_path.lower().endswith('.jpg'):
