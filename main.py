@@ -302,12 +302,10 @@ class TaobaoScraper:
             sku_candidates, sku_all_names = self.scrape_sku_images(page, already_urls)
             image_candidates.extend(sku_candidates)
 
-            # 生成规格清单文本文件
-            if sku_all_names:
-                sku_txt_path = os.path.join(item_dir, "sku_names.txt")
-                with open(sku_txt_path, "w", encoding="utf-8") as f:
-                    f.write("|".join(sku_all_names))
-                self.log(f"  [规格清单] 已生成 sku_names.txt，共 {len(sku_all_names)} 个规格")
+            # 生成规格清单文本文件（内容先定好，目录等有规格图被选中后再建）
+            sku_names_content = "|".join(sku_all_names) if sku_all_names else None
+            if sku_names_content:
+                self.log(f"  [规格清单] 共 {len(sku_all_names)} 个规格，将同规格图存入 images/sku/ 目录")
 
             if video_urls:
                 self.log(f"  [视频] 获取视频并在后台生成封面，共 {len(video_urls)} 个...")
@@ -334,11 +332,24 @@ class TaobaoScraper:
                     
                 if user_selected:
                     self.log(f"  [保存选定内容] 您选择了 {len(user_selected)} 个项目，正在保存...")
+                    sku_dir = None  # 按需创建
                     for item in user_selected:
                         if item.get("is_video"):
                             save_path = os.path.join(item_dir, item["filename"])
                             shutil.move(item["temp_path"], save_path)
                             self.log(f"    [+] 视频保存: {item['filename']}")
+                        elif item.get("group", "").startswith("规格·"):
+                            # 规格图 → images/sku/ 目录
+                            if sku_dir is None:
+                                sku_dir = os.path.join(img_dir, "sku")
+                                os.makedirs(sku_dir, exist_ok=True)
+                            save_path = os.path.join(sku_dir, item["filename"])
+                            body = item["body"]
+                            img = Image.open(BytesIO(body))
+                            if img.mode in ("RGBA", "P"):
+                                img = img.convert("RGB")
+                            img.save(save_path, "JPEG", quality=95)
+                            self.log(f"    [+] 规格图保存: sku/{item['filename']}")
                         else:
                             save_path = os.path.join(img_dir, item["filename"])
                             body = item["body"]
@@ -352,6 +363,14 @@ class TaobaoScraper:
                         if item.get("is_video") and item not in user_selected:
                             try: os.remove(item["temp_path"])
                             except: pass
+
+                    # 写 sku_names.txt 到规格图目录（有规格图被选中时）
+                    if sku_names_content:
+                        txt_dir = sku_dir if sku_dir else item_dir
+                        with open(os.path.join(txt_dir, "sku_names.txt"), "w", encoding="utf-8") as f:
+                            f.write(sku_names_content)
+                        self.log(f"    [+] 规格清单保存: {'images/sku/' if sku_dir else ''}sku_names.txt")
+
                 else:
                     self.log(f"  [放弃] 您没有选择任何内容。")
                     for item in image_candidates:
