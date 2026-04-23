@@ -4,9 +4,12 @@ import re
 import os
 import time
 import queue
+import tempfile
+import shutil
+import subprocess
 import threading
 from io import BytesIO
-from PIL import Image
+from PIL import Image, ImageTk
 from playwright.sync_api import sync_playwright
 try:
     from playwright_stealth import stealth_sync
@@ -100,13 +103,16 @@ def system_beep():
 
 # ─── 爬虫核心 ─────────────────────────────────────────────────
 class TaobaoScraper:
-    def __init__(self, urls, log_fn):
+    def __init__(self, urls, log_queue):
         self.urls = urls
-        self.log = log_fn
+        self.log_queue = log_queue
         self.logger = app_logger
         downloads_dir = os.path.join(str(Path.home()), 'Downloads', 'Taobao_Data')
         os.makedirs(downloads_dir, exist_ok=True)
         self.base_dir = downloads_dir
+
+    def log(self, msg):
+        self.log_queue.put(msg)
 
     def run(self):
         with sync_playwright() as p:
@@ -185,7 +191,7 @@ class TaobaoScraper:
 
             # 主图视频：网络拦截 + JS 双策略
             video_urls_set = set(captured_videos)
-            js_videos = page.evaluate("""() => {
+            js_videos = page.evaluate(r"""() => {
                 let urls = new Set();
                 document.querySelectorAll('video').forEach(v => {
                     if (v.src && v.src.startsWith('http')) urls.add(v.src);
@@ -267,23 +273,86 @@ class TaobaoScraper:
 
             self.log(f"  --> 主图 {len(main_imgs)} 张 | 详情图 {len(desc_imgs)} 张 | 视频 {len(video_urls)} 个 | 属性 {len(props)} 条")
 
-            self.log(f"  [主图] 开始下载，共 {len(main_imgs)} 张...")
+            image_candidates = []
+            self.log(f"  [图片预加载] 正在获取图片以供挑选...")
             for i, img_url in enumerate(main_imgs):
-                self.log(f"    主图 {i+1}/{len(main_imgs)}: {img_url[:60]}...")
-                self.download_image(img_url, os.path.join(img_dir, f"main_{i+1}.jpg"), page)
+                body = self.fetch_image_bytes(img_url, page)
+                if body:
+                    image_candidates.append({
+                        "url": img_url,
+                        "filename": f"main_{i+1}.jpg",
+                        "body": body,
+                        "size": len(body),
+                        "group": "主图"
+                    })
 
-            self.log(f"  [详情图] 开始下载，共 {len(desc_imgs)} 张...")
             for i, img_url in enumerate(desc_imgs):
-                self.log(f"    详情图 {i+1}/{len(desc_imgs)}: {img_url[:60]}...")
-                self.download_image(img_url, os.path.join(img_dir, f"desc_{i+1}.jpg"), page)
+                body = self.fetch_image_bytes(img_url, page)
+                if body:
+                    image_candidates.append({
+                        "url": img_url,
+                        "filename": f"desc_{i+1}.jpg",
+                        "body": body,
+                        "size": len(body),
+                        "group": "详情图"
+                    })
+
+            # 规格图：在视频缓存之前先点击各 SKU 规格抓图（页面状态更稳定）
+            already_urls = set(c["url"] for c in image_candidates)
+            sku_candidates = self.scrape_sku_images(page, already_urls)
+            image_candidates.extend(sku_candidates)
 
             if video_urls:
-                self.log(f"  [视频] 开始下载，共 {len(video_urls)} 个...")
+                self.log(f"  [视频] 获取视频并在后台生成封面，共 {len(video_urls)} 个...")
                 for i, v_url in enumerate(video_urls):
-                    self.log(f"    视频 {i+1}/{len(video_urls)}: {v_url[:60]}...")
-                    self.download_video(v_url, os.path.join(item_dir, f"video_{i+1}.mp4"), page)
+                    self.log(f"    正在缓存视频 {i+1}/{len(video_urls)}: {v_url[:60]}...")
+                    v_item = self.fetch_video_to_temp(v_url, page, f"video_{i+1}.mp4")
+                    if v_item:
+                        image_candidates.append(v_item)
+
+            if image_candidates:
+                self.log(f"  --> 正在等待您在界面确认要保存的图片和视频...")
+                user_selected = self.ask_user_for_images(image_candidates)
+                
+                if user_selected is None:
+                    self.log(f"  [⏹️ 终止] 您点击了终止下载，正在放弃当前商品的所有文件。")
+                    for item in image_candidates:
+                        if item.get("is_video"):
+                            try: os.remove(item["temp_path"])
+                            except: pass
+                    time.sleep(0.5) # ensure handles are free
+                    shutil.rmtree(item_dir, ignore_errors=True)
+                    self.log(f"  ❌ 当前商品【{safe_title}】已跳过，未保存任何信息。")
+                    return # 立刻跳出当前商品的抓取循环
+                    
+                if user_selected:
+                    self.log(f"  [保存选定内容] 您选择了 {len(user_selected)} 个项目，正在保存...")
+                    for item in user_selected:
+                        if item.get("is_video"):
+                            save_path = os.path.join(item_dir, item["filename"])
+                            shutil.move(item["temp_path"], save_path)
+                            self.log(f"    [+] 视频保存: {item['filename']}")
+                        else:
+                            save_path = os.path.join(img_dir, item["filename"])
+                            body = item["body"]
+                            img = Image.open(BytesIO(body))
+                            if img.mode in ("RGBA", "P"):
+                                img = img.convert("RGB")
+                            img.save(save_path, "JPEG", quality=95)
+                    
+                    # 清理未选中的视频临时文件
+                    for item in image_candidates:
+                        if item.get("is_video") and item not in user_selected:
+                            try: os.remove(item["temp_path"])
+                            except: pass
+                else:
+                    self.log(f"  [放弃] 您没有选择任何内容。")
+                    for item in image_candidates:
+                        if item.get("is_video"):
+                            try: os.remove(item["temp_path"])
+                            except: pass
             else:
-                self.log("  [视频] 未检测到视频")
+                self.log(f"  [结果] 未获取到有效内容。")
 
             self.log(f"  [属性] 写入 info.txt，共 {len(props)} 条...")
             with open(os.path.join(item_dir, "info.txt"), "w", encoding="utf-8") as f:
@@ -310,25 +379,18 @@ class TaobaoScraper:
     def check_verification(self, page):
         while True:
             title = page.title()
-            is_blocked = any(k in title for k in ["验证码", "滑块", "安全验证", "登录", "login", "Login"])
+            is_blocked = any(k in title for k in ["验证码", "滑块", "安全验证", "登录", "login", "Login", "登录淘宝"])
             if not is_blocked:
                 is_blocked = page.locator(".nc-container, #baxia-dialog-content, #login, #J_LoginBox, .baxia-dialog").count() > 0
             if is_blocked:
                 system_beep()
-                self.show_top_dialog(
-                    "安全拦截或验证检测",
-                    "检测到验证码、滑块或需要手动登录。\n\n请在浏览器中【手动处理】后，点击确定继续。"
-                )
+                self.log("  --> 检测到安全拦截或需要登录，等待浏览器中手动完成...")
+                event = threading.Event()
+                self.log_queue.put(("SHOW_TOP_DIALOG", "安全拦截或需要登录", "检测到验证码、滑块或需要手动登录淘宝。\n\n如果当前在登录页，请在弹出的浏览器中登入您的账号；如果出现验证码也请手动处理。\n\n完成后点击「确定」继续任务。", event))
+                event.wait()
                 time.sleep(2)
             else:
                 break
-
-    def show_top_dialog(self, title, msg):
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes("-topmost", True)
-        messagebox.showwarning(title, msg, parent=root)
-        root.destroy()
 
     def scroll_page(self, page):
         page.mouse.wheel(0, 300)
@@ -345,28 +407,56 @@ class TaobaoScraper:
             return 'https://' + url
         return url
 
-    def download_video(self, url, save_path, page):
-        """下载视频文件（分块流式写入，支持大文件）"""
+    def fetch_video_to_temp(self, url, page, filename):
+        """把视频下载到临时文件，并用 OpenCV 提取封面，作为候选项"""
         try:
             import urllib.request
             headers = {
                 'User-Agent': page.evaluate("navigator.userAgent"),
                 'Referer': page.url
             }
+            fd, temp_path = tempfile.mkstemp(suffix=".mp4")
+            os.close(fd)
             req = urllib.request.Request(url, headers=headers)
             with urllib.request.urlopen(req, timeout=60) as resp:
-                with open(save_path, 'wb') as f:
+                with open(temp_path, 'wb') as f:
                     while True:
-                        chunk = resp.read(1024 * 1024)  # 每次读 1MB
+                        chunk = resp.read(1024 * 1024)
                         if not chunk:
                             break
                         f.write(chunk)
-            size_mb = os.path.getsize(save_path) / 1024 / 1024
-            self.log(f"    [✓] 视频保存成功 ({size_mb:.1f} MB): {save_path}")
-        except Exception as e:
-            self.log(f"    [!] 视频下载失败: {e}")
+            
+            size_bytes = os.path.getsize(temp_path)
+            first_frame_bytes = None
+            try:
+                import cv2
+                cap = cv2.VideoCapture(temp_path)
+                ret, frame = cap.read()
+                if ret:
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    img = Image.fromarray(frame_rgb)
+                    # 保存封面为 JPEG 格式字节数据
+                    buf = BytesIO()
+                    img.save(buf, format="JPEG", quality=85)
+                    first_frame_bytes = buf.getvalue()
+                cap.release()
+            except Exception as e:
+                self.log(f"    [!] 提取视频封面出错: {e}")
 
-    def download_image(self, url, save_path, page):
+            return {
+                "url": url,
+                "filename": filename,
+                "body": first_frame_bytes,
+                "size": size_bytes,
+                "group": "视频",
+                "is_video": True,
+                "temp_path": temp_path
+            }
+        except Exception as e:
+            self.log(f"    [!] 视频临时下载失败: {e}")
+            return None
+
+    def fetch_image_bytes(self, url, page):
         try:
             headers = {
                 'User-Agent': page.evaluate("navigator.userAgent"),
@@ -376,23 +466,133 @@ class TaobaoScraper:
             if resp.ok:
                 body = resp.body()
                 if len(body) < 10 * 1024:
-                    self.log("  --> 图片小于 10KB，视为无效图片并忽略")
-                    return
-                img = Image.open(BytesIO(body))
-                if img.mode in ("RGBA", "P"):
-                    img = img.convert("RGB")
-                if not save_path.lower().endswith('.jpg'):
-                    save_path = save_path.rsplit('.', 1)[0] + '.jpg'
-                img.save(save_path, "JPEG", quality=95)
+                    # self.log("  --> 图片小于 10KB，视为无效图片并忽略")
+                    return None
+                return body
         except Exception as e:
-            self.log(f"  --> 图片下载失败: {e}")
+            self.log(f"  --> 图片读取失败: {e}")
+        return None
+
+    def scrape_sku_images(self, page, existing_urls):
+        """遍历所有规格（SKU）选项，点击并捕获每个规格对应的主图"""
+        sku_candidates = []
+        seen_urls = set(existing_urls)
+
+        try:
+            # 滚回顶部，确保 SKU 选区可见
+            page.evaluate("window.scrollTo(0, 0)")
+            time.sleep(1.0)
+
+            # ── JS：找所有规格选项 ──
+            # 真实结构：div[class*="valueItem"] > img.valueItemImg + span.valueItemText[title="规格名"]
+            FIND_SKU_JS = """
+() => {
+    const spans = Array.from(document.querySelectorAll('span[class*="valueItemText"]'));
+    return spans.map((el, i) => ({
+        idx : i,
+        text: (el.getAttribute('title') || el.innerText || '').trim()
+    })).filter(it => it.text.length > 0 && it.text.length < 60);
+}
+"""
+
+            CLICK_SKU_JS = """
+(idx) => {
+    const spans = Array.from(document.querySelectorAll('span[class*="valueItemText"]'));
+    if (!spans[idx]) return;
+    // 向上找 div[class*="valueItem"] 然后点它
+    const clickTarget = spans[idx].closest('div[class*="valueItem"]') || spans[idx].parentElement;
+    if (clickTarget) {
+        clickTarget.scrollIntoView({ block: 'center' });
+        clickTarget.click();
+    }
+}
+"""
+
+            GET_MAIN_IMG_JS = """
+() => {
+    const selectors = [
+        'div[class*="mainPic"] img',
+        'div[class*="MainPic"] img',
+        '.tb-gallery img',
+        '#J_ImgBooth',
+        'div[class*="gallery"] img',
+        'div[class*="itemGallery"] img'
+    ];
+    for (const sel of selectors) {
+        const imgs = Array.from(document.querySelectorAll(sel))
+            .map(img => img.src)
+            .filter(src => src && src.startsWith('http') &&
+                          !src.includes('10x10') && !src.includes('lazy'));
+        if (imgs.length > 0) return imgs;
+    }
+    return [];
+}
+"""
+
+            sku_info = page.evaluate(FIND_SKU_JS)
+            if not sku_info:
+                self.log("  [规格图] 未发现规格选项，跳过。")
+                return []
+
+            self.log(f"  [规格图] 发现 {len(sku_info)} 个规格，逐一点击抓图...")
+
+            for sku in sku_info:
+                idx  = sku['idx']
+                raw_name  = sku['text'] or f"规格{idx+1}"
+                safe_name = sanitize_filename(raw_name)[:30] or f"sku_{idx+1}"
+
+                try:
+                    page.evaluate(CLICK_SKU_JS, idx)
+                    time.sleep(1.2)   # 等主图切换动画完成
+
+                    cur_srcs = page.evaluate(GET_MAIN_IMG_JS)
+                    new_imgs = [self.format_url(s) for s in cur_srcs
+                                if self.format_url(s) not in seen_urls]
+
+                    fetched = 0
+                    for img_url in new_imgs:
+                        seen_urls.add(img_url)
+                        body = self.fetch_image_bytes(img_url, page)
+                        if body:
+                            fetched += 1
+                            sku_candidates.append({
+                                "url"     : img_url,
+                                "filename": f"sku_{safe_name}_{fetched}.jpg",
+                                "body"    : body,
+                                "size"    : len(body),
+                                "group"   : f"规格·{safe_name}"
+                            })
+
+                    if fetched:
+                        self.log(f"    ✔ [{safe_name}] 抓到 {fetched} 张新图")
+                    else:
+                        self.log(f"    - [{safe_name}] 无新图（与其他规格相同）")
+
+                except Exception as e:
+                    self.log(f"    [!] 规格【{safe_name}】处理失败: {e}")
+                    continue
+
+            self.log(f"  [规格图] 完成，共采集到 {len(sku_candidates)} 张规格图")
+
+        except Exception as e:
+            self.log(f"  [规格图] 全局出错: {e}")
+
+        return sku_candidates
+
+    def ask_user_for_images(self, candidates):
+        event = threading.Event()
+        result_box = []
+        # 发送特殊指令给主线程，要求弹窗
+        self.log_queue.put(("ASK_USER_IMAGES", candidates, event, result_box))
+        event.wait()
+        return result_box[0] if result_box else []
 
 
 # ─── 单窗口双页面主程序 ──────────────────────────────────────
 def run_app():
     root = tk.Tk()
     root.title("淘宝/天猫商品数据抓取助手")
-    root.geometry("700x540")
+    root.geometry("750x640")
     root.eval('tk::PlaceWindow . center')
 
     log_queue = queue.Queue()
@@ -465,14 +665,52 @@ def run_app():
             text_area.insert('end', '\n')
         text_area.insert('end', '\n'.join(valid_lines))
 
+    def on_clear_paste_submit():
+        on_clear()
+        on_paste()
+        on_submit()
+
     btn_row = tk.Frame(input_frame)
     btn_row.pack(pady=10)
     tk.Button(btn_row, text="粘贴", command=on_paste,
               font=("Arial", 13), padx=14, pady=4).pack(side='left', padx=10)
     tk.Button(btn_row, text="清空", command=on_clear,
               font=("Arial", 13), padx=14, pady=4).pack(side='left', padx=10)
+    btn_one_key = tk.Button(btn_row, text="一键清空粘贴抓取", command=on_clear_paste_submit,
+                            font=("Arial", 13, "bold"), padx=14, pady=4)
+    btn_one_key.pack(side='left', padx=10)
     tk.Button(btn_row, text="开始抓取 ▶", command=on_submit,
               font=("Arial", 13, "bold"), padx=14, pady=4).pack(side='left', padx=10)
+
+    preview_frame = tk.Frame(input_frame)
+    preview_frame.pack(fill='x', padx=12, pady=5)
+    tk.Label(preview_frame, text="剪贴板有效网址预览：", font=("Arial", 11), fg="#555").pack(anchor='w')
+    preview_text = scrolledtext.ScrolledText(preview_frame, height=4, width=82, state='disabled', bg="#f9f9f9", fg="#333", font=("Courier", 11))
+    preview_text.pack(fill='x')
+
+    def update_clipboard():
+        try:
+            clipboard = root.clipboard_get()
+            valid_lines = [l.strip() for l in clipboard.splitlines() if l.strip().startswith(('http://', 'https://'))]
+            
+            preview_text.configure(state='normal')
+            preview_text.delete('1.0', 'end')
+            if valid_lines:
+                preview_text.insert('1.0', '\n'.join(valid_lines))
+                btn_one_key.config(state='normal')
+            else:
+                preview_text.insert('1.0', '（当前剪贴板中无有效的 http / https 开头的商品网址）')
+                btn_one_key.config(state='disabled')
+            preview_text.configure(state='disabled')
+        except Exception:
+            preview_text.configure(state='normal')
+            preview_text.delete('1.0', 'end')
+            preview_text.insert('1.0', '（无法读取剪贴板内容）')
+            btn_one_key.config(state='disabled')
+            preview_text.configure(state='disabled')
+        root.after(800, update_clipboard)
+
+    update_clipboard()
 
     text_area.focus_set()
 
@@ -514,10 +752,210 @@ def run_app():
         except Exception:
             pass
 
+    def show_image_selection_dialog(candidates, event, result_box):
+        top = tk.Toplevel(root)
+        top.title("挑选需要下载的图片")
+        top.geometry("750x550")
+        top.transient(root)
+        top.grab_set()
+
+        tk.Label(top, text="请勾选需要下载的图片（默认全选）：", font=("Arial", 12, "bold")).pack(side="top", pady=10)
+
+        # 底部按钮区优先放到最下面，防止被其它元素挤出屏幕
+        btn_frame = tk.Frame(top)
+        btn_frame.pack(side="bottom", pady=10)
+
+        container = tk.Frame(top)
+        container.pack(side="top", fill="both", expand=True, padx=10, pady=5)
+
+        canvas = tk.Canvas(container, highlightthickness=0, bg=top.cget("bg"))
+        scrollbar = tk.Scrollbar(container, orient="vertical", command=canvas.yview)
+        scrollable_frame = tk.Frame(canvas, bg=top.cget("bg"))
+
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+
+        def on_mousewheel(event):
+            try:
+                # Tk 9.0 (Python 3.14+) macOS 使用 <<ScrollWheel>> 虚拟事件
+                # delta 是无符号16位整数：正值向下，大值(>32767)是负数(向上)
+                delta = event.delta
+                if delta > 32767:       # 无符号转有符号
+                    delta = delta - 65536
+                # 缩放为合理的滚动步长
+                steps = max(1, abs(delta) // 40)
+                direction = -1 if delta > 0 else 1
+                canvas.yview_scroll(direction * steps, "units")
+            except Exception:
+                pass
+
+        def bind_wheel_recursive(widget):
+            """递归绑定到每个子控件（兼容 Tk 9.0）"""
+            widget.bind("<<ScrollWheel>>", on_mousewheel)
+            for child in widget.winfo_children():
+                bind_wheel_recursive(child)
+
+        item_frames = []
+        vars_dict = {}
+        top.image_refs = [] 
+
+        full_top_ref = [None]
+        full_lbl_ref = [None]
+        current_idx = [0]
+        full_photo_ref = [None]
+
+        def open_gallery(start_idx):
+            if full_top_ref[0] and full_top_ref[0].winfo_exists():
+                full_top_ref[0].destroy()
+                
+            ft = tk.Toplevel(top)
+            full_top_ref[0] = ft
+            ft.transient(top)
+            ft.attributes("-topmost", True)
+            
+            lbl = tk.Label(ft, cursor="hand2")
+            lbl.pack()
+            full_lbl_ref[0] = lbl
+            
+            def load_image(idx):
+                idx = idx % len(candidates)
+                current_idx[0] = idx
+                item = candidates[idx]
+                
+                body_bytes = item['body']
+                img_full = Image.open(BytesIO(body_bytes))
+                if img_full.mode in ("RGBA", "P"):
+                    img_full = img_full.convert("RGB")
+                    
+                sw = top.winfo_screenwidth() - 100
+                sh = top.winfo_screenheight() - 100
+                if img_full.width > sw or img_full.height > sh:
+                    img_full.thumbnail((sw, sh))
+                    
+                full_photo_ref[0] = ImageTk.PhotoImage(img_full)
+                full_lbl_ref[0].configure(image=full_photo_ref[0])
+                
+                update_title()
+            
+            def update_title():
+                idx = current_idx[0]
+                is_sel = vars_dict[idx].get()
+                status = "✅ 已选" if is_sel else "❌ 未选"
+                ft.title(f"{status} | [{candidates[idx]['group']}] 查看大图 - 方向键切换，空格选中，ESC关闭")
+                
+            def on_left(e): load_image(current_idx[0] - 1)
+            def on_right(e): load_image(current_idx[0] + 1)
+            def on_space(e):
+                idx = current_idx[0]
+                vars_dict[idx].set(not vars_dict[idx].get())
+                update_title()
+                
+            ft.bind("<Left>", on_left)
+            ft.bind("<Right>", on_right)
+            ft.bind("<space>", on_space)
+            ft.bind("<Escape>", lambda e: ft.destroy())
+            lbl.bind("<Button-1>", lambda e: ft.destroy())
+            
+            load_image(start_idx)
+            
+            ft.update_idletasks()
+            x = (top.winfo_screenwidth() // 2) - (ft.winfo_width() // 2)
+            y = (top.winfo_screenheight() // 2) - (ft.winfo_height() // 2)
+            ft.geometry(f"+{max(0, x)}+{max(0, y)}")
+            
+            ft.focus_set()
+
+        for idx, item in enumerate(candidates):
+            var = tk.BooleanVar(value=True)
+            size_kb = item['size'] / 1024
+            text_str = f"[{item['group']}]\n{size_kb:.1f} KB"
+            
+            cell_frame = tk.Frame(scrollable_frame, bg=top.cget("bg"))
+            item_frames.append(cell_frame)
+
+            photo = None
+            try:
+                img = Image.open(BytesIO(item['body']))
+                if img.mode in ("RGBA", "P"):
+                    img = img.convert("RGB")
+                img.thumbnail((120, 120))
+                photo = ImageTk.PhotoImage(img)
+                top.image_refs.append(photo)
+            except Exception:
+                pass
+
+            if photo:
+                img_lbl = tk.Label(cell_frame, image=photo, width=120, height=120, bg="#e0e0e0", cursor="hand2")
+                if item.get("is_video"):
+                    img_lbl.bind("<Button-1>", lambda e, p=item['temp_path']: open_directory(p))
+                else:
+                    img_lbl.bind("<Button-1>", lambda e, i=idx: open_gallery(i))
+                img_lbl.grid(row=0, column=0, padx=2, pady=2)
+            else:
+                img_lbl = tk.Label(cell_frame, text="无图", width=16, height=8, bg="#cccccc")
+                img_lbl.grid(row=0, column=0, padx=2, pady=2)
+
+            cb = tk.Checkbutton(cell_frame, text=text_str, variable=var, font=("Arial", 11), justify="center", bg=top.cget("bg"))
+            cb.grid(row=1, column=0, pady=3)
+            vars_dict[idx] = var
+
+        def reflow_grid(event):
+            canvas_width = event.width
+            item_width = 140 # approximate width of one thumbnail block + padding
+            cols = max(1, canvas_width // item_width)
+            
+            for i, cell in enumerate(item_frames):
+                cell.grid(row=i // cols, column=i % cols, padx=5, pady=5, sticky="n")
+                
+            top.after(50, lambda: canvas.configure(scrollregion=canvas.bbox("all")))
+            # 每次重排后重新递归绑定，因为新 widget 可能尚未绑定
+            top.after(80, lambda: bind_wheel_recursive(top))
+
+        canvas.bind("<Configure>", reflow_grid)
+
+        def on_select_all():
+            for var in vars_dict.values(): var.set(True)
+
+        def on_invert():
+            for var in vars_dict.values(): var.set(not var.get())
+
+        def on_confirm():
+            selected = [candidates[i] for i, var in vars_dict.items() if var.get()]
+            result_box.append(selected)
+            top.destroy()
+            event.set()
+            
+        def on_abort():
+            result_box.append(None)
+            top.destroy()
+            event.set()
+
+        tk.Button(btn_frame, text="全选", command=on_select_all, width=10).pack(side="left", padx=10)
+        tk.Button(btn_frame, text="反选", command=on_invert, width=10).pack(side="left", padx=10)
+        tk.Button(btn_frame, text="确定下载", command=on_confirm, width=15, bg="#4CAF50", fg="black").pack(side="left", padx=10)
+        tk.Button(btn_frame, text="终止下载", command=on_abort, width=15, bg="#f44336", fg="black").pack(side="left", padx=10)
+        
+        def on_closing():
+            result_box.append([]) 
+            top.destroy()
+            event.set()
+        top.protocol("WM_DELETE_WINDOW", on_closing)
+
     def poll_queue():
         try:
             while True:
                 msg = log_queue.get_nowait()
+                if isinstance(msg, tuple):
+                    if msg[0] == "ASK_USER_IMAGES":
+                        show_image_selection_dialog(msg[1], msg[2], msg[3])
+                    elif msg[0] == "SHOW_TOP_DIALOG":
+                        messagebox.showwarning(msg[1], msg[2], parent=root)
+                        msg[3].set()
+                    continue
+                
                 log_box.configure(state='normal')
                 if msg.startswith('OPEN_DIR::'):
                     path = msg[len('OPEN_DIR::'):]
@@ -541,7 +979,7 @@ def run_app():
         root.after(150, poll_queue)
 
     def run_scraper(urls):
-        scraper = TaobaoScraper(urls, lambda msg: log_queue.put(msg))
+        scraper = TaobaoScraper(urls, log_queue)
         scraper.run()
 
     root.after(150, poll_queue)
