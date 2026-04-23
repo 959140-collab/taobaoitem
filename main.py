@@ -299,8 +299,15 @@ class TaobaoScraper:
 
             # 规格图：在视频缓存之前先点击各 SKU 规格抓图（页面状态更稳定）
             already_urls = set(c["url"] for c in image_candidates)
-            sku_candidates = self.scrape_sku_images(page, already_urls)
+            sku_candidates, sku_all_names = self.scrape_sku_images(page, already_urls)
             image_candidates.extend(sku_candidates)
+
+            # 生成规格清单文本文件
+            if sku_all_names:
+                sku_txt_path = os.path.join(item_dir, "sku_names.txt")
+                with open(sku_txt_path, "w", encoding="utf-8") as f:
+                    f.write("|".join(sku_all_names))
+                self.log(f"  [规格清单] 已生成 sku_names.txt，共 {len(sku_all_names)} 个规格")
 
             if video_urls:
                 self.log(f"  [视频] 获取视频并在后台生成封面，共 {len(video_urls)} 个...")
@@ -476,6 +483,7 @@ class TaobaoScraper:
     def scrape_sku_images(self, page, existing_urls):
         """遍历所有规格（SKU）选项，点击并捕获每个规格对应的主图"""
         sku_candidates = []
+        all_sku_names  = []   # 所有规格名（不管有没有新图）
         seen_urls = set(existing_urls)
 
         try:
@@ -540,6 +548,7 @@ class TaobaoScraper:
                 idx  = sku['idx']
                 raw_name  = sku['text'] or f"规格{idx+1}"
                 safe_name = sanitize_filename(raw_name)[:30] or f"sku_{idx+1}"
+                all_sku_names.append(raw_name)   # 每个规格都记录
 
                 try:
                     page.evaluate(CLICK_SKU_JS, idx)
@@ -577,7 +586,7 @@ class TaobaoScraper:
         except Exception as e:
             self.log(f"  [规格图] 全局出错: {e}")
 
-        return sku_candidates
+        return sku_candidates, all_sku_names
 
     def ask_user_for_images(self, candidates):
         event = threading.Event()
