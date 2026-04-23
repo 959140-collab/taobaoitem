@@ -370,7 +370,7 @@ class TaobaoScraper:
                     # 写 sku_names.txt：只写被选中的规格，全没选则不创建
                     if sku_entries and sku_dir:
                         with open(os.path.join(sku_dir, "sku_names.txt"), "w", encoding="utf-8") as f:
-                            f.write(",".join(sku_entries))
+                            f.write(",\n".join(sku_entries))
                         self.log(f"    [+] 规格清单保存: images/sku/sku_names.txt")
 
                 else:
