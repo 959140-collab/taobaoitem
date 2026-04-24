@@ -858,9 +858,10 @@ class ImageLabelWindow:
                     source_language="zh",
                     target_language="en",
                     source_text=name,
-                    format_type="text"
+                    format_type="text",
+                    scene="title"
                 )
-                resp = client.translate_e_commerce(req)
+                resp = client.translate_ecommerce(req)
                 en = resp.body.data.translated
                 results.append(en)
                 self._log(f"  🌐  {name}  →  {en}")
@@ -892,13 +893,28 @@ class ImageLabelWindow:
         luminance = 0.299 * avg[0] + 0.587 * avg[1] + 0.114 * avg[2]
         text_color = (30, 30, 30) if luminance > 128 else (240, 240, 240)
 
-        # 字体大小自适应色带高度
+        # 字体大小初始自适应色带高度
         font_size = max(int(band_h * 0.55), 14)
         font = self._load_font(font_size)
 
         # 居中绘制
         bbox = draw.textbbox((0, 0), text, font=font)
         tw = bbox[2] - bbox[0]
+        
+        # 适配图片宽度：如果文字太宽，缩小字体
+        max_tw = w * 0.95
+        if tw > max_tw:
+            font_size = max(int(font_size * (max_tw / tw)), 10)
+            font = self._load_font(font_size)
+            bbox = draw.textbbox((0, 0), text, font=font)
+            tw = bbox[2] - bbox[0]
+            # 循环微调以确保一定放得下
+            while tw > max_tw and font_size > 8:
+                font_size -= 1
+                font = self._load_font(font_size)
+                bbox = draw.textbbox((0, 0), text, font=font)
+                tw = bbox[2] - bbox[0]
+
         th = bbox[3] - bbox[1]
         x = (w - tw) / 2
         y = h + (band_h - th) / 2 - bbox[1]  # 补偿 ascender
