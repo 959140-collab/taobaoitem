@@ -659,26 +659,34 @@ class ImageLabelWindow:
     # ── UI ──────────────────────────────────────────────────
     # ── UI ──────────────────────────────────────────────────
     def _build_ui(self):
-        # 提示文字
-        tk.Label(
-            self.win,
-            text="📂  请选择 sku_names.txt 文件（文件和图片需在同一目录下）",
-            font=("Arial", 12), fg="#3355aa", pady=12
-        ).pack(fill="x", padx=12)
+        # 提示区：说明 Tcl 9 不兼容 tkdnd，指引用户用剪贴板或浏览按钮
+        tip = tk.Frame(self.win, bg="#e8f0ff", pady=10)
+        tip.pack(fill="x", padx=12, pady=(10, 4))
+        tk.Label(tip, text="📋  在 Finder 中选中 sku_names.txt，按 ⌘C 复制，再点「从剪贴板粘贴路径」",
+                 font=("Arial", 11), bg="#e8f0ff", fg="#334499", wraplength=580,
+                 justify="left").pack(anchor="w", padx=10)
+        tk.Label(tip, text="      或直接点击「浏览…」按钮选择文件",
+                 font=("Arial", 11), bg="#e8f0ff", fg="#334499").pack(anchor="w", padx=10, pady=(2, 0))
 
-        # 路径输入行，支持用户直接拖入路径字符串到 Entry
+        # 路径行
         path_row = tk.Frame(self.win)
-        path_row.pack(fill="x", padx=12, pady=4)
-        tk.Label(path_row, text="文件路径:", font=("Arial", 11)).pack(side="left")
+        path_row.pack(fill="x", padx=12, pady=6)
+        tk.Label(path_row, text="路径:", font=("Arial", 11)).pack(side="left")
         self.path_entry = tk.Entry(path_row, textvariable=self.file_path, font=("Arial", 11), fg="#333")
         self.path_entry.pack(side="left", fill="x", expand=True, padx=6)
-        tk.Button(path_row, text="浏览…", command=self._browse,
-                  font=("Arial", 11), padx=10, pady=3).pack(side="left")
 
-        # 自动清理路径花括号
+        # 自动清理路径花括号（osascript 返回的路径有时带花括号）
         self.file_path.trace_add("write", self._sanitize_path)
 
-        # 开始处理按钮：Frame+Label 组合绕过 macOS 覆盖 Button bg 的问题
+        # 按钮行
+        btn_row = tk.Frame(self.win)
+        btn_row.pack(pady=4)
+        tk.Button(btn_row, text="📋 从剪贴板粘贴路径", command=self._paste_from_clipboard,
+                  font=("Arial", 11), padx=12, pady=4).pack(side="left", padx=8)
+        tk.Button(btn_row, text="浏览…", command=self._browse,
+                  font=("Arial", 11), padx=12, pady=4).pack(side="left", padx=8)
+
+        # 开始处理：Frame+Label 绕过 macOS 覆盖 Button bg 的问题
         self._btn_bg    = "#1a3a6e"
         self._btn_hover = "#2a5aae"
         btn_outer = tk.Frame(self.win, bg=self._btn_bg, padx=3, pady=3)
@@ -702,7 +710,7 @@ class ImageLabelWindow:
         # 日志区
         tk.Label(self.win, text="处理日志：", font=("Arial", 11), anchor="w").pack(fill="x", padx=12)
         self.log_text = scrolledtext.ScrolledText(
-            self.win, height=14, font=("Courier", 11), state="disabled",
+            self.win, height=12, font=("Courier", 11), state="disabled",
             bg="#1e1e2e", fg="#cdd6f4"
         )
         self.log_text.pack(fill="both", expand=True, padx=12, pady=(0, 10))
@@ -712,6 +720,34 @@ class ImageLabelWindow:
         cleaned = raw.strip().strip("{}").strip('"').strip("'")
         if cleaned != raw:
             self.file_path.set(cleaned)
+
+    def _paste_from_clipboard(self):
+        """从剪贴板读取文件路径（macOS: ⌘C 复制文件后，用 osascript 拿到 POSIX 路径）"""
+        try:
+            import subprocess
+            # 先尝试 osascript 读取 Finder 复制的文件路径
+            result = subprocess.run(
+                ['osascript', '-e',
+                 'tell application "Finder" to get POSIX path of (first item of (get selection as alias list))'],
+                capture_output=True, text=True, timeout=5
+            )
+            p = result.stdout.strip()
+            if p and os.path.exists(p):
+                self.file_path.set(p)
+                return
+        except Exception:
+            pass
+        # 兜底：直接读剪贴板文本内容
+        try:
+            p = self.win.clipboard_get().strip().strip("{}").strip('"').strip("'")
+            if p and os.path.exists(p):
+                self.file_path.set(p)
+                return
+        except Exception:
+            pass
+        messagebox.showinfo("提示",
+            "未能从剪贴板获取文件路径。\n请在 Finder 中选中 sku_names.txt 后按 ⌘C，再点此按钮；\n或直接用「浏览…」按钮选择文件。",
+            parent=self.win)
 
     # ── 文件选择 ──────────────────────────────────────────────
     def _browse(self):
