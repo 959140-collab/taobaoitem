@@ -22,7 +22,7 @@ from pathlib import Path
 try:
     from tkinterdnd2 import TkinterDnD, DND_FILES
     _HAS_DND = True
-except ImportError:
+except Exception:
     _HAS_DND = False
 
 try:
@@ -657,39 +657,47 @@ class ImageLabelWindow:
         self._build_ui()
 
     # ── UI ──────────────────────────────────────────────────
+    # ── UI ──────────────────────────────────────────────────
     def _build_ui(self):
-        pad = dict(padx=12, pady=6)
+        # 提示文字
+        tk.Label(
+            self.win,
+            text="📂  请选择 sku_names.txt 文件（文件和图片需在同一目录下）",
+            font=("Arial", 12), fg="#3355aa", pady=12
+        ).pack(fill="x", padx=12)
 
-        # 拖拽 / 浏览区
-        drop_frame = tk.Frame(self.win, bd=2, relief="groove", bg="#f0f4ff")
-        drop_frame.pack(fill="x", **pad)
-
-        self.drop_label = tk.Label(
-            drop_frame,
-            text="📂  拖拽 sku_names.txt 到此处\n或点击下方按钮浏览选择",
-            font=("Arial", 12), bg="#f0f4ff", fg="#3355aa",
-            pady=18
-        )
-        self.drop_label.pack(fill="x")
-
-        if _HAS_DND:
-            self.drop_label.drop_target_register(DND_FILES)
-            self.drop_label.dnd_bind("<<Drop>>", self._on_drop)
-
-        # 文件路径显示
+        # 路径输入行，支持用户直接拖入路径字符串到 Entry
         path_row = tk.Frame(self.win)
-        path_row.pack(fill="x", padx=12, pady=2)
-        tk.Entry(path_row, textvariable=self.file_path,
-                 font=("Arial", 11), fg="#333").pack(side="left", fill="x", expand=True)
+        path_row.pack(fill="x", padx=12, pady=4)
+        tk.Label(path_row, text="文件路径:", font=("Arial", 11)).pack(side="left")
+        self.path_entry = tk.Entry(path_row, textvariable=self.file_path, font=("Arial", 11), fg="#333")
+        self.path_entry.pack(side="left", fill="x", expand=True, padx=6)
         tk.Button(path_row, text="浏览…", command=self._browse,
-                  font=("Arial", 11), padx=8).pack(side="left", padx=6)
+                  font=("Arial", 11), padx=10, pady=3).pack(side="left")
 
-        # 按钮行
-        btn_row = tk.Frame(self.win)
-        btn_row.pack(pady=8)
-        tk.Button(btn_row, text="开始处理 ▶", command=self._start,
-                  font=("Arial", 13, "bold"), padx=16, pady=5,
-                  bg="#2255cc", fg="white").pack()
+        # 自动清理路径花括号
+        self.file_path.trace_add("write", self._sanitize_path)
+
+        # 开始处理按钮：Frame+Label 组合绕过 macOS 覆盖 Button bg 的问题
+        self._btn_bg    = "#1a3a6e"
+        self._btn_hover = "#2a5aae"
+        btn_outer = tk.Frame(self.win, bg=self._btn_bg, padx=3, pady=3)
+        btn_outer.pack(pady=14)
+        btn_inner = tk.Label(
+            btn_outer,
+            text="  开始处理 ▶  ",
+            font=("Arial", 15, "bold"),
+            bg=self._btn_bg, fg="#ffffff",
+            padx=24, pady=10,
+            cursor="hand2"
+        )
+        btn_inner.pack()
+        for w in (btn_outer, btn_inner):
+            w.bind("<Button-1>", lambda e: self._start())
+            w.bind("<Enter>",    lambda e: [btn_outer.config(bg=self._btn_hover),
+                                            btn_inner.config(bg=self._btn_hover)])
+            w.bind("<Leave>",    lambda e: [btn_outer.config(bg=self._btn_bg),
+                                            btn_inner.config(bg=self._btn_bg)])
 
         # 日志区
         tk.Label(self.win, text="处理日志：", font=("Arial", 11), anchor="w").pack(fill="x", padx=12)
@@ -699,6 +707,12 @@ class ImageLabelWindow:
         )
         self.log_text.pack(fill="both", expand=True, padx=12, pady=(0, 10))
 
+    def _sanitize_path(self, *args):
+        raw = self.file_path.get()
+        cleaned = raw.strip().strip("{}").strip('"').strip("'")
+        if cleaned != raw:
+            self.file_path.set(cleaned)
+
     # ── 文件选择 ──────────────────────────────────────────────
     def _browse(self):
         p = filedialog.askopenfilename(
@@ -707,17 +721,7 @@ class ImageLabelWindow:
         )
         if p:
             self.file_path.set(p)
-            self.drop_label.config(text=f"✅  已选择: {os.path.basename(p)}")
 
-    def _on_drop(self, event):
-        raw = event.data.strip()
-        # tkinterdnd2 在 macOS 上路径可能带花括号
-        if raw.startswith("{") and raw.endswith("}"):
-            raw = raw[1:-1]
-        self.file_path.set(raw)
-        self.drop_label.config(text=f"✅  已拖入: {os.path.basename(raw)}")
-
-    # ── 启动处理 ──────────────────────────────────────────────
     def _start(self):
         p = self.file_path.get().strip()
         if not p or not os.path.exists(p):
@@ -891,7 +895,8 @@ class ImageLabelWindow:
 
 # ─── 单窗口双页面主程序 ──────────────────────────────────────
 def run_app():
-    root = TkinterDnD.Tk() if _HAS_DND else tk.Tk()
+    global _HAS_DND
+    root = tk.Tk()
     root.title("淘宝/天猫商品数据抓取助手")
     root.geometry("750x640")
     root.eval('tk::PlaceWindow . center')
