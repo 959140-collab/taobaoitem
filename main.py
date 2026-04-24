@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import messagebox, scrolledtext
+from tkinter import messagebox, scrolledtext, filedialog
 import re
 import os
 import time
@@ -8,8 +8,9 @@ import tempfile
 import shutil
 import subprocess
 import threading
+import json
 from io import BytesIO
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk, ImageDraw, ImageFont, ImageStat
 from playwright.sync_api import sync_playwright
 try:
     from playwright_stealth import stealth_sync
@@ -19,9 +20,26 @@ import platform
 from pathlib import Path
 
 try:
+    from tkinterdnd2 import TkinterDnD, DND_FILES
+    _HAS_DND = True
+except ImportError:
+    _HAS_DND = False
+
+try:
     import pytesseract
 except ImportError:
     pytesseract = None
+
+# ── 加载配置文件 ──────────────────────────────────────────────
+def load_config():
+    cfg_path = os.path.join(os.path.dirname(__file__), "config.json")
+    if os.path.exists(cfg_path):
+        try:
+            with open(cfg_path, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
 
 # ─── 历史记录文件 ──────────────────────────────────────────────
 HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'urls_history.txt')
@@ -618,9 +636,262 @@ class TaobaoScraper:
         return result_box[0] if result_box else []
 
 
+# ─── 图片增加英文标题 工具窗口 ──────────────────────────────
+class ImageLabelWindow:
+    """读取 sku_names.txt → 阿里云翻译 → 底部色带写英文名 → 生成 _en.jpg"""
+
+    FONT_PATHS = [
+        "/System/Library/Fonts/Helvetica.ttc",
+        "/System/Library/Fonts/Arial.ttf",
+        "/Library/Fonts/Arial.ttf",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+    ]
+
+    def __init__(self, parent):
+        self.config = load_config()
+        self.win = tk.Toplevel(parent)
+        self.win.title("图片增加英文标题")
+        self.win.geometry("640x500")
+        self.win.resizable(True, True)
+        self.file_path = tk.StringVar()
+        self._build_ui()
+
+    # ── UI ──────────────────────────────────────────────────
+    def _build_ui(self):
+        pad = dict(padx=12, pady=6)
+
+        # 拖拽 / 浏览区
+        drop_frame = tk.Frame(self.win, bd=2, relief="groove", bg="#f0f4ff")
+        drop_frame.pack(fill="x", **pad)
+
+        self.drop_label = tk.Label(
+            drop_frame,
+            text="📂  拖拽 sku_names.txt 到此处\n或点击下方按钮浏览选择",
+            font=("Arial", 12), bg="#f0f4ff", fg="#3355aa",
+            pady=18
+        )
+        self.drop_label.pack(fill="x")
+
+        if _HAS_DND:
+            self.drop_label.drop_target_register(DND_FILES)
+            self.drop_label.dnd_bind("<<Drop>>", self._on_drop)
+
+        # 文件路径显示
+        path_row = tk.Frame(self.win)
+        path_row.pack(fill="x", padx=12, pady=2)
+        tk.Entry(path_row, textvariable=self.file_path,
+                 font=("Arial", 11), fg="#333").pack(side="left", fill="x", expand=True)
+        tk.Button(path_row, text="浏览…", command=self._browse,
+                  font=("Arial", 11), padx=8).pack(side="left", padx=6)
+
+        # 按钮行
+        btn_row = tk.Frame(self.win)
+        btn_row.pack(pady=8)
+        tk.Button(btn_row, text="开始处理 ▶", command=self._start,
+                  font=("Arial", 13, "bold"), padx=16, pady=5,
+                  bg="#2255cc", fg="white").pack()
+
+        # 日志区
+        tk.Label(self.win, text="处理日志：", font=("Arial", 11), anchor="w").pack(fill="x", padx=12)
+        self.log_text = scrolledtext.ScrolledText(
+            self.win, height=14, font=("Courier", 11), state="disabled",
+            bg="#1e1e2e", fg="#cdd6f4"
+        )
+        self.log_text.pack(fill="both", expand=True, padx=12, pady=(0, 10))
+
+    # ── 文件选择 ──────────────────────────────────────────────
+    def _browse(self):
+        p = filedialog.askopenfilename(
+            title="选择规格清单文件",
+            filetypes=[("文本文件", "*.txt"), ("所有文件", "*.*")]
+        )
+        if p:
+            self.file_path.set(p)
+            self.drop_label.config(text=f"✅  已选择: {os.path.basename(p)}")
+
+    def _on_drop(self, event):
+        raw = event.data.strip()
+        # tkinterdnd2 在 macOS 上路径可能带花括号
+        if raw.startswith("{") and raw.endswith("}"):
+            raw = raw[1:-1]
+        self.file_path.set(raw)
+        self.drop_label.config(text=f"✅  已拖入: {os.path.basename(raw)}")
+
+    # ── 启动处理 ──────────────────────────────────────────────
+    def _start(self):
+        p = self.file_path.get().strip()
+        if not p or not os.path.exists(p):
+            messagebox.showerror("错误", "请先选择有效的 sku_names.txt 文件", parent=self.win)
+            return
+        self.log_text.configure(state="normal")
+        self.log_text.delete("1.0", "end")
+        self.log_text.configure(state="disabled")
+        threading.Thread(target=self._process, args=(p,), daemon=True).start()
+
+    # ── 核心处理流程 ──────────────────────────────────────────
+    def _process(self, txt_path):
+        base_dir = os.path.dirname(txt_path)
+        self._log(f"读取文件: {txt_path}")
+
+        entries = self._parse_txt(txt_path)
+        if not entries:
+            self._log("⚠️  文件为空或格式不正确，已中止")
+            return
+        self._log(f"共 {len(entries)} 条规格记录")
+
+        # 翻译
+        names_zh = [name for name, _ in entries]
+        names_en = self._translate_batch(names_zh)
+
+        # 处理图片
+        ok, skip, fail = 0, 0, 0
+        for (name_zh, filename), name_en in zip(entries, names_en):
+            if name_en is None:
+                skip += 1
+                self._log(f"  ⏭  跳过（翻译失败）: {filename}")
+                continue
+            img_path = os.path.join(base_dir, filename)
+            if not os.path.exists(img_path):
+                fail += 1
+                self._log(f"  ✗  文件不存在: {filename}")
+                continue
+            try:
+                out = self._add_label(img_path, name_en)
+                ok += 1
+                self._log(f"  ✔  {filename} → [{name_en}] → {os.path.basename(out)}")
+            except Exception as e:
+                fail += 1
+                self._log(f"  ✗  {filename}: {e}")
+
+        summary = f"处理完成\n\n✅ 成功: {ok} 张\n⏭ 跳过（翻译失败）: {skip} 张\n❌ 失败: {fail} 张"
+        self._log("\n" + summary)
+        self.win.after(0, lambda: messagebox.showinfo("处理完成", summary, parent=self.win))
+
+    # ── 解析 txt ──────────────────────────────────────────────
+    def _parse_txt(self, txt_path):
+        with open(txt_path, encoding="utf-8") as f:
+            content = f.read()
+        entries = []
+        for line in content.split(",\n"):
+            line = line.strip().rstrip(",").strip()
+            if "|" in line:
+                name, filename = line.split("|", 1)
+                name = name.strip()
+                filename = filename.strip()
+                if name and filename:
+                    entries.append((name, filename))
+        return entries
+
+    # ── 阿里云翻译 ────────────────────────────────────────────
+    def _translate_batch(self, names):
+        cfg = self.config.get("aliyun", {})
+        ak_id = cfg.get("access_key_id", "").strip()
+        ak_sec = cfg.get("access_key_secret", "").strip()
+
+        if not ak_id or not ak_sec:
+            self._log("⚠️  config.json 中未配置阿里云凭证，请先填写 access_key_id / access_key_secret")
+            return [None] * len(names)
+
+        try:
+            from alibabacloud_alimt20181012.client import Client
+            from alibabacloud_alimt20181012 import models as alimt_models
+            from alibabacloud_tea_openapi import models as open_api_models
+        except ImportError:
+            self._log("⚠️  未找到阿里云 SDK，请运行: pip install alibabacloud-alimt20181012")
+            return [None] * len(names)
+
+        try:
+            cfg_api = open_api_models.Config(
+                access_key_id=ak_id,
+                access_key_secret=ak_sec,
+                endpoint="mt.aliyuncs.com"
+            )
+            client = Client(cfg_api)
+        except Exception as e:
+            self._log(f"⚠️  初始化翻译客户端失败: {e}")
+            return [None] * len(names)
+
+        results = []
+        for name in names:
+            try:
+                req = alimt_models.TranslateECommerceRequest(
+                    source_language="zh",
+                    target_language="en",
+                    source_text=name,
+                    format_type="text"
+                )
+                resp = client.translate_e_commerce(req)
+                en = resp.body.data.translated
+                results.append(en)
+                self._log(f"  🌐  {name}  →  {en}")
+            except Exception as e:
+                self._log(f"  ⚠️  翻译失败 [{name}]: {e}")
+                results.append(None)
+        return results
+
+    # ── 加色带 + 写字 ─────────────────────────────────────────
+    def _add_label(self, img_path, text):
+        img = Image.open(img_path).convert("RGB")
+        w, h = img.size
+
+        band_h = max(int(h * 0.09), 30)
+
+        # 取底部 20% 计算平均色，作为色带底色（稍微压暗）
+        sample = img.crop((0, max(0, h - int(h * 0.2)), w, h))
+        mean = ImageStat.Stat(sample).mean[:3]
+        avg = tuple(int(c) for c in mean)
+        band_color = tuple(max(0, c - 25) for c in avg)
+
+        # 新图：原图 + 下方色带
+        new_img = Image.new("RGB", (w, h + band_h), band_color)
+        new_img.paste(img, (0, 0))
+
+        draw = ImageDraw.Draw(new_img)
+
+        # 文字颜色（亮底用深字，暗底用白字）
+        luminance = 0.299 * avg[0] + 0.587 * avg[1] + 0.114 * avg[2]
+        text_color = (30, 30, 30) if luminance > 128 else (240, 240, 240)
+
+        # 字体大小自适应色带高度
+        font_size = max(int(band_h * 0.55), 14)
+        font = self._load_font(font_size)
+
+        # 居中绘制
+        bbox = draw.textbbox((0, 0), text, font=font)
+        tw = bbox[2] - bbox[0]
+        th = bbox[3] - bbox[1]
+        x = (w - tw) / 2
+        y = h + (band_h - th) / 2 - bbox[1]  # 补偿 ascender
+        draw.text((x, y), text, fill=text_color, font=font)
+
+        # 保存为 _en.jpg
+        name_no_ext, ext = os.path.splitext(img_path)
+        out_path = f"{name_no_ext}_en{ext or '.jpg'}"
+        new_img.save(out_path, "JPEG", quality=95)
+        return out_path
+
+    def _load_font(self, size):
+        for fp in self.FONT_PATHS:
+            try:
+                return ImageFont.truetype(fp, size)
+            except Exception:
+                continue
+        return ImageFont.load_default()
+
+    # ── 日志写入（线程安全）─────────────────────────────────────
+    def _log(self, msg):
+        self.win.after(0, lambda m=msg: self._append_log(m))
+
+    def _append_log(self, msg):
+        self.log_text.configure(state="normal")
+        self.log_text.insert("end", msg + "\n")
+        self.log_text.see("end")
+        self.log_text.configure(state="disabled")
+
+
 # ─── 单窗口双页面主程序 ──────────────────────────────────────
 def run_app():
-    root = tk.Tk()
+    root = TkinterDnD.Tk() if _HAS_DND else tk.Tk()
     root.title("淘宝/天猫商品数据抓取助手")
     root.geometry("750x640")
     root.eval('tk::PlaceWindow . center')
@@ -711,6 +982,14 @@ def run_app():
     btn_one_key.pack(side='left', padx=10)
     tk.Button(btn_row, text="开始抓取 ▶", command=on_submit,
               font=("Arial", 13, "bold"), padx=14, pady=4).pack(side='left', padx=10)
+
+    # ── 工具按钮行 ──
+    tool_row = tk.Frame(input_frame)
+    tool_row.pack(pady=(0, 6))
+    tk.Button(tool_row, text="🏷  图片增加英文标题",
+              command=lambda: ImageLabelWindow(root),
+              font=("Arial", 12), padx=14, pady=4,
+              bg="#f0f4ff", fg="#2255cc").pack()
 
     preview_frame = tk.Frame(input_frame)
     preview_frame.pack(fill='x', padx=12, pady=5)
