@@ -30,7 +30,7 @@ try:
 except ImportError:
     pytesseract = None
 
-# ── 加载配置文件 ──────────────────────────────────────────────
+# ── 加载置文件 ──────────────────────────────────────────────
 def load_config():
     cfg_path = os.path.join(os.path.dirname(__file__), "config.json")
     if os.path.exists(cfg_path):
@@ -58,7 +58,7 @@ def save_history(content):
 LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'download.log')
 
 class AppLogger:
-    """追加写入 download.log，线程安全"""
+    """追加写 download.log，线程安"""
     _lock = threading.Lock() if False else __import__('threading').Lock()
 
     def _write(self, level, msg):
@@ -85,7 +85,7 @@ class AppLogger:
 
 app_logger = AppLogger()
 
-# ─── 工具函数 ──────────────────────────────────────────────────
+# ─── 工函数 ──────────────────────────────────────────────────
 def sanitize_filename(name):
     return re.sub(r'[\\/:*?"<>|\r\n\t]', '', name).strip()
 
@@ -165,7 +165,7 @@ class TaobaoScraper:
 
             browser.close()
             if not failed:
-                self.log(f"\n✅ 全部 {total} 件商品下载完成！文件保存在:\n{self.base_dir}")
+                self.log(f"\n✅ 部 {total} 件商品下载完成！文件保存在:\n{self.base_dir}")
 
     def process_item(self, page, url):
         try:
@@ -265,7 +265,7 @@ class TaobaoScraper:
                 return results;
             }""")
 
-            # OCR 兜底
+            # OCR 底
             if not props and pytesseract:
                 self.log("  --> DOM 未找到属性，尝试 OCR 识别...")
                 ocr_img_path = os.path.join(item_dir, "temp_ocr.png")
@@ -315,17 +315,17 @@ class TaobaoScraper:
                         "group": "详情图"
                     })
 
-            # 规格图：在视频缓存之前先点击各 SKU 规格抓图（页面状态更稳定）
+            # 规格图：在视频缓存之前点击各 SKU 规格抓图（页面状态更稳定）
             already_urls = set(c["url"] for c in image_candidates)
             sku_candidates, sku_all_names = self.scrape_sku_images(page, already_urls)
             image_candidates.extend(sku_candidates)
 
             # 规格图数量日志
             if sku_candidates:
-                self.log(f"  [规格清单] 共发现 {len(sku_candidates)} 张规格图，审核后将存入 images/sku/ 目录")
+                self.log(f"  [规格清单] 发现 {len(sku_candidates)} 张规格图，审核后将存 images/sku/ 目录")
 
             if video_urls:
-                self.log(f"  [视频] 获取视频并在后台生成封面，共 {len(video_urls)} 个...")
+                self.log(f"  [视频] 获取视频并在后台生成封面， {len(video_urls)} 个...")
                 for i, v_url in enumerate(video_urls):
                     self.log(f"    正在缓存视频 {i+1}/{len(video_urls)}: {v_url[:60]}...")
                     v_item = self.fetch_video_to_temp(v_url, page, f"video_{i+1}.mp4")
@@ -385,7 +385,7 @@ class TaobaoScraper:
                             try: os.remove(item["temp_path"])
                             except: pass
 
-                    # 写 sku_names.txt：只写被选中的规格，全没选则不创建
+                    # 写 sku_names.txt：只写被选中的规格，没选则不创建
                     if sku_entries and sku_dir:
                         with open(os.path.join(sku_dir, "sku_names.txt"), "w", encoding="utf-8") as f:
                             f.write(",\n".join(sku_entries))
@@ -400,7 +400,7 @@ class TaobaoScraper:
             else:
                 self.log(f"  [结果] 未获取到有效内容。")
 
-            self.log(f"  [属性] 写入 info.txt，共 {len(props)} 条...")
+            self.log(f"  [属性] 写 info.txt， {len(props)} 条...")
             with open(os.path.join(item_dir, "info.txt"), "w", encoding="utf-8") as f:
                 f.write(f"原始URL: {url}\n")
                 f.write(f"抓取时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
@@ -425,14 +425,14 @@ class TaobaoScraper:
     def check_verification(self, page):
         while True:
             title = page.title()
-            is_blocked = any(k in title for k in ["验证码", "滑块", "安全验证", "登录", "login", "Login", "登录淘宝"])
+            is_blocked = any(k in title for k in ["验证码", "滑块", "安验证", "登录", "login", "Login", "登录淘宝"])
             if not is_blocked:
                 is_blocked = page.locator(".nc-container, #baxia-dialog-content, #login, #J_LoginBox, .baxia-dialog").count() > 0
             if is_blocked:
                 system_beep()
-                self.log("  --> 检测到安全拦截或需要登录，等待浏览器中手动完成...")
+                self.log("  --> 检测到安拦截或需要登录，等待浏览器中手动完成...")
                 event = threading.Event()
-                self.log_queue.put(("SHOW_TOP_DIALOG", "安全拦截或需要登录", "检测到验证码、滑块或需要手动登录淘宝。\n\n如果当前在登录页，请在弹出的浏览器中登入您的账号；如果出现验证码也请手动处理。\n\n完成后点击「确定」继续任务。", event))
+                self.log_queue.put(("SHOW_TOP_DIALOG", "安拦截或需要登录", "检测到验证码、滑块或需要手动登录淘宝。\n\n如果当前在登录页，请在弹出的浏览器中登您的账号；如果出现验证码也请手动处理。\n\n完成后点击「确定」继续任务。", event))
                 event.wait()
                 time.sleep(2)
             else:
@@ -522,16 +522,11 @@ class TaobaoScraper:
     def scrape_sku_images(self, page, existing_urls):
         """遍历所有规格（SKU）选项，点击并捕获每个规格对应的主图"""
         sku_candidates = []
-        all_sku_names  = []   # 所有规格名（不管有没有新图）
+        all_sku_names  = []
         seen_urls = set(existing_urls)
-
         try:
-            # 滚回顶部，确保 SKU 选区可见
             page.evaluate("window.scrollTo(0, 0)")
             time.sleep(1.0)
-
-            # ── JS：找所有规格选项 ──
-            # 真实结构：div[class*="valueItem"] > img.valueItemImg + span.valueItemText[title="规格名"]
             FIND_SKU_JS = """
 () => {
     const spans = Array.from(document.querySelectorAll('span[class*="valueItemText"]'));
@@ -541,12 +536,10 @@ class TaobaoScraper:
     })).filter(it => it.text.length > 0 && it.text.length < 60);
 }
 """
-
             CLICK_SKU_JS = """
 (idx) => {
     const spans = Array.from(document.querySelectorAll('span[class*="valueItemText"]'));
     if (!spans[idx]) return;
-    // 向上找 div[class*="valueItem"] 然后点它
     const clickTarget = spans[idx].closest('div[class*="valueItem"]') || spans[idx].parentElement;
     if (clickTarget) {
         clickTarget.scrollIntoView({ block: 'center' });
@@ -554,7 +547,6 @@ class TaobaoScraper:
     }
 }
 """
-
             GET_MAIN_IMG_JS = """
 () => {
     const selectors = [
@@ -575,28 +567,21 @@ class TaobaoScraper:
     return [];
 }
 """
-
             sku_info = page.evaluate(FIND_SKU_JS)
             if not sku_info:
                 self.log("  [规格图] 未发现规格选项，跳过。")
-                return []
-
+                return [], []
             self.log(f"  [规格图] 发现 {len(sku_info)} 个规格，逐一点击抓图...")
-
             for sku in sku_info:
-                idx  = sku['idx']
-                raw_name  = sku['text'] or f"规格{idx+1}"
+                idx = sku['idx']
+                raw_name = sku['text'] or f"规格{idx+1}"
                 safe_name = sanitize_filename(raw_name)[:30] or f"sku_{idx+1}"
-                all_sku_names.append(raw_name)   # 每个规格都记录
-
+                all_sku_names.append(raw_name)
                 try:
                     page.evaluate(CLICK_SKU_JS, idx)
-                    time.sleep(1.2)   # 等主图切换动画完成
-
+                    time.sleep(1.2)
                     cur_srcs = page.evaluate(GET_MAIN_IMG_JS)
-                    new_imgs = [self.format_url(s) for s in cur_srcs
-                                if self.format_url(s) not in seen_urls]
-
+                    new_imgs = [self.format_url(s) for s in cur_srcs if self.format_url(s) not in seen_urls]
                     fetched = 0
                     for img_url in new_imgs:
                         seen_urls.add(img_url)
@@ -604,348 +589,296 @@ class TaobaoScraper:
                         if body:
                             fetched += 1
                             sku_candidates.append({
-                                "url"     : img_url,
+                                "url": img_url,
                                 "filename": f"sku_{safe_name}_{fetched}.jpg",
-                                "body"    : body,
-                                "size"    : len(body),
-                                "group"   : f"规格·{safe_name}"
+                                "body": body,
+                                "size": len(body),
+                                "group": f"规格·{safe_name}"
                             })
-
-                    if fetched:
-                        self.log(f"    ✔ [{safe_name}] 抓到 {fetched} 张新图")
-                    else:
-                        self.log(f"    - [{safe_name}] 无新图（与其他规格相同）")
-
+                    if fetched: self.log(f"    ✔ [{safe_name}] 抓到 {fetched} 张新图")
+                    else: self.log(f"    - [{safe_name}] 无新图")
                 except Exception as e:
                     self.log(f"    [!] 规格【{safe_name}】处理失败: {e}")
                     continue
-
-            self.log(f"  [规格图] 完成，共采集到 {len(sku_candidates)} 张规格图")
-
+            self.log(f"  [规格图] 完成，共采集到 {len(sku_candidates)} 张图")
         except Exception as e:
             self.log(f"  [规格图] 全局出错: {e}")
-
         return sku_candidates, all_sku_names
 
     def ask_user_for_images(self, candidates):
         event = threading.Event()
         result_box = []
-        # 发送特殊指令给主线程，要求弹窗
         self.log_queue.put(("ASK_USER_IMAGES", candidates, event, result_box))
         event.wait()
         return result_box[0] if result_box else []
 
-
-# ─── 图片增加英文标题 工具窗口 ──────────────────────────────
 class ImageLabelWindow:
-    """读取 sku_names.txt → 阿里云翻译 → 底部色带写英文名 → 生成 _en.jpg"""
-
-    FONT_PATHS = [
-        "/System/Library/Fonts/Helvetica.ttc",
-        "/System/Library/Fonts/Arial.ttf",
-        "/Library/Fonts/Arial.ttf",
-        "/System/Library/Fonts/Supplemental/Arial.ttf",
-    ]
-
     def __init__(self, parent):
         self.config = load_config()
         self.win = tk.Toplevel(parent)
         self.win.title("图片增加英文标题")
-        self.win.geometry("640x500")
+        self.win.geometry("900x850")
         self.win.resizable(True, True)
         self.file_path = tk.StringVar()
+        self.main_container = tk.Frame(self.win)
+        self.main_container.pack(fill="both", expand=True)
+        self.preview_win = None 
+        self.preview_label = None
         self._build_ui()
 
-    # ── UI ──────────────────────────────────────────────────
-    # ── UI ──────────────────────────────────────────────────
     def _build_ui(self):
-        # 提示区：说明 Tcl 9 不兼容 tkdnd，指引用户用剪贴板或浏览按钮
-        tip = tk.Frame(self.win, bg="#e8f0ff", pady=10)
-        tip.pack(fill="x", padx=12, pady=(10, 4))
-        tk.Label(tip, text="📋  在 Finder 中选中 sku_names.txt，按 ⌘C 复制，再点「从剪贴板粘贴路径」",
-                 font=("Arial", 11), bg="#e8f0ff", fg="#334499", wraplength=580,
-                 justify="left").pack(anchor="w", padx=10)
-        tk.Label(tip, text="      或直接点击「浏览…」按钮选择文件",
-                 font=("Arial", 11), bg="#e8f0ff", fg="#334499").pack(anchor="w", padx=10, pady=(2, 0))
+        for w in self.main_container.winfo_children(): w.destroy()
+        self.top_panel = tk.Frame(self.main_container)
+        self.top_panel.pack(fill="x", side="top", pady=(0, 5))
 
-        # 路径行
-        path_row = tk.Frame(self.win)
-        path_row.pack(fill="x", padx=12, pady=6)
+        path_row = tk.Frame(self.top_panel)
+        path_row.pack(fill="x", padx=12, pady=5)
         tk.Label(path_row, text="路径:", font=("Arial", 11)).pack(side="left")
         self.path_entry = tk.Entry(path_row, textvariable=self.file_path, font=("Arial", 11), fg="#333")
         self.path_entry.pack(side="left", fill="x", expand=True, padx=6)
-
-        # 自动清理路径花括号（osascript 返回的路径有时带花括号）
         self.file_path.trace_add("write", self._sanitize_path)
-
-        # 按钮行
-        btn_row = tk.Frame(self.win)
-        btn_row.pack(pady=4)
+        btn_row = tk.Frame(self.top_panel)
+        btn_row.pack(pady=5)
         tk.Button(btn_row, text="📋 从剪贴板粘贴路径", command=self._paste_from_clipboard,
-                  font=("Arial", 11), padx=12, pady=4).pack(side="left", padx=8)
+                  font=("Arial", 11), padx=15, pady=5).pack(side="left", padx=10)
         tk.Button(btn_row, text="浏览…", command=self._browse,
-                  font=("Arial", 11), padx=12, pady=4).pack(side="left", padx=8)
-
-        # 开始处理：Frame+Label 绕过 macOS 覆盖 Button bg 的问题
-        self._btn_bg    = "#1a3a6e"
-        self._btn_hover = "#2a5aae"
-        btn_outer = tk.Frame(self.win, bg=self._btn_bg, padx=3, pady=3)
-        btn_outer.pack(pady=14)
-        btn_inner = tk.Label(
-            btn_outer,
-            text="  开始处理 ▶  ",
-            font=("Arial", 15, "bold"),
-            bg=self._btn_bg, fg="#ffffff",
-            padx=24, pady=10,
-            cursor="hand2"
-        )
-        btn_inner.pack()
-        for w in (btn_outer, btn_inner):
-            w.bind("<Button-1>", lambda e: self._start())
-            w.bind("<Enter>",    lambda e: [btn_outer.config(bg=self._btn_hover),
-                                            btn_inner.config(bg=self._btn_hover)])
-            w.bind("<Leave>",    lambda e: [btn_outer.config(bg=self._btn_bg),
-                                            btn_inner.config(bg=self._btn_bg)])
-
-        # 日志区
-        tk.Label(self.win, text="处理日志：", font=("Arial", 11), anchor="w").pack(fill="x", padx=12)
-        self.log_text = scrolledtext.ScrolledText(
-            self.win, height=12, font=("Courier", 11), state="disabled",
-            bg="#1e1e2e", fg="#cdd6f4"
-        )
-        self.log_text.pack(fill="both", expand=True, padx=12, pady=(0, 10))
+                  font=("Arial", 11), padx=15, pady=5).pack(side="left", padx=10)
+        tk.Button(btn_row, text="📂 载入文件并审查", command=self._start,
+                  font=("Arial", 11), padx=15, pady=5).pack(side="left", padx=10)
+        self.list_container = tk.Frame(self.main_container)
+        self.list_container.pack(fill="both", expand=True)
+        self.empty_lbl = tk.Label(self.list_container, text="请先载入文件...", font=("Arial", 12), fg="#999", pady=150)
+        self.empty_lbl.pack()
 
     def _sanitize_path(self, *args):
         raw = self.file_path.get()
         cleaned = raw.strip().strip("{}").strip('"').strip("'")
-        if cleaned != raw:
-            self.file_path.set(cleaned)
+        if cleaned != raw: self.file_path.set(cleaned)
 
     def _paste_from_clipboard(self):
-        """从剪贴板读取文件路径（macOS: ⌘C 复制文件后，用 osascript 拿到 POSIX 路径）"""
         try:
             import subprocess
-            # 先尝试 osascript 读取 Finder 复制的文件路径
-            result = subprocess.run(
-                ['osascript', '-e',
-                 'tell application "Finder" to get POSIX path of (first item of (get selection as alias list))'],
-                capture_output=True, text=True, timeout=5
-            )
+            result = subprocess.run(['osascript', '-e', 'tell application "Finder" to get POSIX path of (first item of (get selection as alias list))'],
+                                 capture_output=True, text=True, timeout=5)
             p = result.stdout.strip()
             if p and os.path.exists(p):
                 self.file_path.set(p)
                 return
-        except Exception:
-            pass
-        # 兜底：直接读剪贴板文本内容
+        except: pass
         try:
             p = self.win.clipboard_get().strip().strip("{}").strip('"').strip("'")
             if p and os.path.exists(p):
                 self.file_path.set(p)
                 return
-        except Exception:
-            pass
-        messagebox.showinfo("提示",
-            "未能从剪贴板获取文件路径。\n请在 Finder 中选中 sku_names.txt 后按 ⌘C，再点此按钮；\n或直接用「浏览…」按钮选择文件。",
-            parent=self.win)
+        except: pass
+        messagebox.showinfo("提示", "未能从剪贴板获取文件路径。", parent=self.win)
 
-    # ── 文件选择 ──────────────────────────────────────────────
     def _browse(self):
-        p = filedialog.askopenfilename(
-            title="选择规格清单文件",
-            filetypes=[("文本文件", "*.txt"), ("所有文件", "*.*")]
-        )
-        if p:
-            self.file_path.set(p)
+        p = filedialog.askopenfilename(filetypes=[("文本文件", "*.txt"), ("所有文件", "*.*")], parent=self.win)
+        if p: self.file_path.set(p)
 
     def _start(self):
         p = self.file_path.get().strip()
         if not p or not os.path.exists(p):
-            messagebox.showerror("错误", "请先选择有效的 sku_names.txt 文件", parent=self.win)
+            messagebox.showerror("错误", "请选择有效文件", parent=self.win)
             return
-        self.log_text.configure(state="normal")
-        self.log_text.delete("1.0", "end")
-        self.log_text.configure(state="disabled")
         threading.Thread(target=self._process, args=(p,), daemon=True).start()
 
-    # ── 核心处理流程 ──────────────────────────────────────────
     def _process(self, txt_path):
-        base_dir = os.path.dirname(txt_path)
-        self._log(f"读取文件: {txt_path}")
-
         entries = self._parse_txt(txt_path)
         if not entries:
-            self._log("⚠️  文件为空或格式不正确，已中止")
+            messagebox.showwarning("提示", "文件为空或解析失败", parent=self.win)
             return
-        self._log(f"共 {len(entries)} 条规格记录")
+        base_dir = os.path.dirname(txt_path)
+        self.win.after(0, lambda: self._show_edit_view(entries, base_dir, txt_path))
 
-        # 翻译
-        names_zh = [name for name, _ in entries]
-        names_en = self._translate_batch(names_zh)
+    def _show_edit_view(self, entries, base_dir, txt_path):
+        for w in self.list_container.winfo_children(): w.destroy()
+        header = tk.Frame(self.list_container)
+        header.pack(fill="x", side="top", pady=(0, 5))
 
-        # 处理图片
-        ok, skip, fail = 0, 0, 0
-        for (name_zh, filename), name_en in zip(entries, names_en):
-            if name_en is None:
-                skip += 1
-                self._log(f"  ⏭  跳过（翻译失败）: {filename}")
-                continue
-            img_path = os.path.join(base_dir, filename)
-            if not os.path.exists(img_path):
-                fail += 1
-                self._log(f"  ✗  文件不存在: {filename}")
-                continue
+        btn_opts = {"font": ("Arial", 11), "padx": 8, "pady": 5}
+        r1 = tk.Frame(header); r1.pack(pady=4)
+        def translate_all():
+            to_translate = [(ze, ee) for sv, ze, ee, fn in self.edit_data if not sv.get()]
+            def _do():
+                for ze, ee in to_translate:
+                    zh = ze.get().strip()
+                    if not zh: continue
+                    self.win.after(0, lambda e=ee: [e.delete(0, "end"), e.insert(0, "正在翻译...")])
+                    res = self._translate_batch([zh])
+                    self.win.after(0, lambda e=ee, v=res[0]: [e.delete(0, "end"), e.insert(0, v or "失败")])
+            threading.Thread(target=_do, daemon=True).start()
+        tk.Button(r1, text="🌐 翻译", command=translate_all, **btn_opts).pack(side="left", padx=3)
+        tk.Button(r1, text="🔄 重载", command=lambda: self._process(txt_path), **btn_opts).pack(side="left", padx=3)
+        def save_changes():
+            lines = []
+            for _, ze, ee, fn in self.edit_data:
+                zh, en = ze.get().strip(), ee.get().strip()
+                if en in ("正在翻译...", "翻译失败"): en = ""
+                if zh and fn:
+                    lines.append(f"{zh}|{fn}|{en}" if en else f"{zh}|{fn}")
             try:
-                out = self._add_label(img_path, name_en)
-                ok += 1
-                self._log(f"  ✔  {filename} → [{name_en}] → {os.path.basename(out)}")
-            except Exception as e:
-                fail += 1
-                self._log(f"  ✗  {filename}: {e}")
+                with open(txt_path, "w", encoding="utf-8") as f: f.write(",\n".join(lines))
+                messagebox.showinfo("成功", "保存成功", parent=self.win)
+            except Exception as e: messagebox.showerror("错误", str(e), parent=self.win)
+        tk.Button(r1, text="💾 保存", command=save_changes, **btn_opts).pack(side="left", padx=3)
+        tk.Button(r1, text="🚀 写入", command=lambda: self._finalize(base_dir), **btn_opts).pack(side="left", padx=3)
+        
+        tk.Label(r1, text="查找:").pack(side="left", padx=(8, 2))
+        f_ent = tk.Entry(r1, width=10); f_ent.pack(side="left", padx=2)
+        tk.Label(r1, text="替换:").pack(side="left", padx=(5, 2))
+        r_ent = tk.Entry(r1, width=10); r_ent.pack(side="left", padx=2)
+        
+        def do_fr():
+            f, r = f_ent.get(), r_ent.get()
+            if not f: return
+            for _, ze, _, _ in self.edit_data:
+                ze.config(bg="white")
+                if f in ze.get():
+                    if r: 
+                        v = ze.get().replace(f, r)
+                        ze.delete(0, "end"); ze.insert(0, v); ze.config(bg="#E1F5FE")
+                    else: ze.config(bg="#FFF9C4")
+        tk.Button(r1, text="🔍 替换", command=do_fr, **btn_opts).pack(side="left", padx=3)
+        list_frame = tk.Frame(self.list_container)
+        list_frame.pack(fill="both", expand=True)
+        canvas = tk.Canvas(list_frame, highlightthickness=0)
+        scrollbar = tk.Scrollbar(list_frame, orient="vertical", command=canvas.yview)
+        scrollable_content = tk.Frame(canvas)
+        window_id = canvas.create_window((0, 0), window=scrollable_content, anchor="nw")
+        def _on_canvas_configure(e): canvas.configure(scrollregion=canvas.bbox("all"))
+        def _on_frame_configure(e): canvas.itemconfig(window_id, width=e.width)
+        scrollable_content.bind("<Configure>", _on_canvas_configure)
+        canvas.bind("<Configure>", _on_frame_configure)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        scrollable_content.columnconfigure(2, weight=1)
+        scrollable_content.columnconfigure(3, weight=1)
+        self.edit_data = []
+        for i, (name_zh, filename, name_en) in enumerate(entries, start=1):
+            sv = tk.BooleanVar(value=False)
+            tk.Checkbutton(scrollable_content, variable=sv).grid(row=i, column=0)
+            tk.Button(scrollable_content, text="🖼️", command=lambda f=filename: self._show_preview(f, base_dir), relief="flat").grid(row=i, column=1)
+            ze = tk.Entry(scrollable_content, font=("Arial", 11))
+            ze.insert(0, name_zh); ze.grid(row=i, column=2, sticky="ew", padx=2, pady=2)
+            ee = tk.Entry(scrollable_content, font=("Arial", 11))
+            ee.insert(0, name_en); ee.grid(row=i, column=3, sticky="ew", padx=2, pady=2)
+            tk.Button(scrollable_content, text="翻译", command=lambda z=ze, e=ee: self._single_trans(z, e)).grid(row=i, column=4, padx=2)
+            self.edit_data.append((sv, ze, ee, filename))
 
-        summary = f"处理完成\n\n✅ 成功: {ok} 张\n⏭ 跳过（翻译失败）: {skip} 张\n❌ 失败: {fail} 张"
-        self._log("\n" + summary)
-        self.win.after(0, lambda: messagebox.showinfo("处理完成", summary, parent=self.win))
 
-    # ── 解析 txt ──────────────────────────────────────────────
+    def _save_changes(self, txt_path):
+        lines = []
+        for _, ze, ee, fn in self.edit_data:
+            zh, en = ze.get().strip(), ee.get().strip()
+            if en in ("正在翻译...", "翻译失败"): en = ""
+            if zh and fn:
+                lines.append(f"{zh}|{fn}|{en}" if en else f"{zh}|{fn}")
+        try:
+            with open(txt_path, "w", encoding="utf-8") as f: f.write(",\n".join(lines))
+            messagebox.showinfo("成功", "保存成功", parent=self.win)
+        except Exception as e: messagebox.showerror("错误", str(e), parent=self.win)
+    def _show_preview(self, fname, base_dir):
+        img_path = os.path.join(base_dir, fname)
+        if not os.path.exists(img_path): return
+        try:
+            from PIL import Image, ImageTk
+            img = Image.open(img_path)
+            img.thumbnail((600, 800))
+            tk_img = ImageTk.PhotoImage(img)
+            if not self.preview_win or not self.preview_win.winfo_exists():
+                self.preview_win = tk.Toplevel(self.win)
+                self.preview_label = tk.Label(self.preview_win, bg="#000")
+                self.preview_label.pack(padx=2, pady=2)
+                self.win.update_idletasks()
+                self.preview_win.geometry(f"+{self.win.winfo_x() + self.win.winfo_width() + 10}+{self.win.winfo_y()}")
+            self.preview_label.config(image=tk_img); self.preview_label.image = tk_img
+            self.preview_win.title(f"预览: {fname}")
+        except: pass
+
+    def _single_trans(self, ze, ee):
+        zh = ze.get().strip()
+        if not zh: return
+        ee.delete(0, "end"); ee.insert(0, "正在翻译...")
+        threading.Thread(target=lambda: [res:=self._translate_batch([zh]), self.win.after(0, lambda: [ee.delete(0, "end"), ee.insert(0, res[0] or "失败")])], daemon=True).start()
+
+    def _finalize(self, base_dir):
+        data = [(ze.get().strip(), ee.get().strip(), fn) for _, ze, ee, fn in self.edit_data if ee.get().strip() not in ("正在翻译...", "翻译失败")]
+        if not data: return messagebox.showwarning("提示", "没有可写内容", parent=self.win)
+        threading.Thread(target=self._process_images, args=(data, base_dir), daemon=True).start()
+
+    def _process_images(self, data, base_dir):
+        for i, (zh, en, fn) in enumerate(data, 1):
+            path = os.path.join(base_dir, fn)
+            if os.path.exists(path):
+                try: self._add_label(path, en)
+                except: pass
+        self.win.after(0, lambda: messagebox.showinfo("完成", "图片处理完成！", parent=self.win))
+
     def _parse_txt(self, txt_path):
-        with open(txt_path, encoding="utf-8") as f:
-            content = f.read()
-        entries = []
-        for line in content.split(",\n"):
-            line = line.strip().rstrip(",").strip()
-            if "|" in line:
-                name, filename = line.split("|", 1)
-                name = name.strip()
-                filename = filename.strip()
-                if name and filename:
-                    entries.append((name, filename))
-        return entries
+        try:
+            with open(txt_path, "rb") as f: raw = f.read()
+            for enc in ["utf-8-sig", "utf-16", "utf-8", "gbk"]:
+                try: content = raw.decode(enc); break
+                except: continue
+            else: return []
+            res = []
+            for line in content.split(",\n"):
+                line = line.strip().rstrip(",")
+                if "|" in line:
+                    p = line.split("|")
+                    if len(p) >= 2: res.append((p[0].strip(), p[1].strip(), p[2].strip() if len(p)>2 else ""))
+            return res
+        except: return []
 
-    # ── 阿里云翻译 ────────────────────────────────────────────
     def _translate_batch(self, names):
         cfg = self.config.get("aliyun", {})
-        ak_id = cfg.get("access_key_id", "").strip()
-        ak_sec = cfg.get("access_key_secret", "").strip()
-
-        if not ak_id or not ak_sec:
-            self._log("⚠️  config.json 中未配置阿里云凭证，请先填写 access_key_id / access_key_secret")
-            return [None] * len(names)
-
+        ak_id, ak_sec = cfg.get("access_key_id", ""), cfg.get("access_key_secret", "")
+        if not ak_id or not ak_sec: return [None] * len(names)
         try:
             from alibabacloud_alimt20181012.client import Client
             from alibabacloud_alimt20181012 import models as alimt_models
             from alibabacloud_tea_openapi import models as open_api_models
-        except ImportError:
-            self._log("⚠️  未找到阿里云 SDK，请运行: pip install alibabacloud-alimt20181012")
-            return [None] * len(names)
+            client = Client(open_api_models.Config(access_key_id=ak_id, access_key_secret=ak_sec, endpoint="mt.aliyuncs.com"))
+            results = []
+            for name in names:
+                try:
+                    resp = client.translate_ecommerce(alimt_models.TranslateECommerceRequest(source_language="zh", target_language="en", source_text=name, format_type="text", scene="title"))
+                    results.append(resp.body.data.translated)
+                except: results.append(None)
+            return results
+        except: return [None] * len(names)
 
-        try:
-            cfg_api = open_api_models.Config(
-                access_key_id=ak_id,
-                access_key_secret=ak_sec,
-                endpoint="mt.aliyuncs.com"
-            )
-            client = Client(cfg_api)
-        except Exception as e:
-            self._log(f"⚠️  初始化翻译客户端失败: {e}")
-            return [None] * len(names)
-
-        results = []
-        for name in names:
-            try:
-                req = alimt_models.TranslateECommerceRequest(
-                    source_language="zh",
-                    target_language="en",
-                    source_text=name,
-                    format_type="text",
-                    scene="title"
-                )
-                resp = client.translate_ecommerce(req)
-                en = resp.body.data.translated
-                results.append(en)
-                self._log(f"  🌐  {name}  →  {en}")
-            except Exception as e:
-                self._log(f"  ⚠️  翻译失败 [{name}]: {e}")
-                results.append(None)
-        return results
-
-    # ── 加色带 + 写字 ─────────────────────────────────────────
     def _add_label(self, img_path, text):
+        from PIL import Image, ImageDraw, ImageFont, ImageStat
         img = Image.open(img_path).convert("RGB")
         w, h = img.size
-
         band_h = max(int(h * 0.09), 30)
-
-        # 取底部 20% 计算平均色，作为色带底色（稍微压暗）
         sample = img.crop((0, max(0, h - int(h * 0.2)), w, h))
-        mean = ImageStat.Stat(sample).mean[:3]
-        avg = tuple(int(c) for c in mean)
-        band_color = tuple(max(0, c - 25) for c in avg)
-
-        # 新图：原图 + 下方色带
-        new_img = Image.new("RGB", (w, h + band_h), band_color)
+        avg = tuple(int(c) for c in ImageStat.Stat(sample).mean[:3])
+        new_img = Image.new("RGB", (w, h + band_h), tuple(max(0, c - 25) for c in avg))
         new_img.paste(img, (0, 0))
-
         draw = ImageDraw.Draw(new_img)
-
-        # 文字颜色（亮底用深字，暗底用白字）
-        luminance = 0.299 * avg[0] + 0.587 * avg[1] + 0.114 * avg[2]
-        text_color = (30, 30, 30) if luminance > 128 else (240, 240, 240)
-
-        # 字体大小初始自适应色带高度
-        font_size = max(int(band_h * 0.55), 14)
-        font = self._load_font(font_size)
-
-        # 居中绘制
+        lum = 0.299 * avg[0] + 0.587 * avg[1] + 0.114 * avg[2]
+        color = (30, 30, 30) if lum > 128 else (240, 240, 240)
+        f_size = max(int(band_h * 0.55), 14)
+        def get_f(s):
+            for fp in ["/System/Library/Fonts/Helvetica.ttc", "/System/Library/Fonts/Arial.ttf", "/Library/Fonts/Arial.ttf"]:
+                try: return ImageFont.truetype(fp, s)
+                except: continue
+            return ImageFont.load_default()
+        font = get_f(f_size)
         bbox = draw.textbbox((0, 0), text, font=font)
         tw = bbox[2] - bbox[0]
-        
-        # 适配图片宽度：如果文字太宽，缩小字体
-        max_tw = w * 0.95
-        if tw > max_tw:
-            font_size = max(int(font_size * (max_tw / tw)), 10)
-            font = self._load_font(font_size)
+        if tw > w * 0.95:
+            f_size = max(int(f_size * (w * 0.95 / tw)), 8)
+            font = get_f(f_size)
             bbox = draw.textbbox((0, 0), text, font=font)
             tw = bbox[2] - bbox[0]
-            # 循环微调以确保一定放得下
-            while tw > max_tw and font_size > 8:
-                font_size -= 1
-                font = self._load_font(font_size)
-                bbox = draw.textbbox((0, 0), text, font=font)
-                tw = bbox[2] - bbox[0]
-
-        th = bbox[3] - bbox[1]
-        x = (w - tw) / 2
-        y = h + (band_h - th) / 2 - bbox[1]  # 补偿 ascender
-        draw.text((x, y), text, fill=text_color, font=font)
-
-        # 保存为 _en.jpg
-        name_no_ext, ext = os.path.splitext(img_path)
-        out_path = f"{name_no_ext}_en{ext or '.jpg'}"
-        new_img.save(out_path, "JPEG", quality=95)
-        return out_path
-
-    def _load_font(self, size):
-        for fp in self.FONT_PATHS:
-            try:
-                return ImageFont.truetype(fp, size)
-            except Exception:
-                continue
-        return ImageFont.load_default()
-
-    # ── 日志写入（线程安全）─────────────────────────────────────
-    def _log(self, msg):
-        self.win.after(0, lambda m=msg: self._append_log(m))
-
-    def _append_log(self, msg):
-        self.log_text.configure(state="normal")
-        self.log_text.insert("end", msg + "\n")
-        self.log_text.see("end")
-        self.log_text.configure(state="disabled")
-
-
-# ─── 单窗口双页面主程序 ──────────────────────────────────────
+        draw.text(((w - tw) / 2, h + (band_h - (bbox[3]-bbox[1])) / 2 - bbox[1]), text, fill=color, font=font)
+        new_img.save(img_path.replace(".jpg", "_en.jpg") if "_en" not in img_path else img_path, "JPEG", quality=95)
 def run_app():
     global _HAS_DND
     root = tk.Tk()
@@ -968,11 +901,11 @@ def run_app():
         progress_frame.pack(fill='both', expand=True)
 
     # ════════════════════════════════════════════════
-    # 输入页
+    # 输页
     # ════════════════════════════════════════════════
     input_top = tk.Frame(input_frame)
     input_top.pack(fill='x', padx=10, pady=6)
-    tk.Label(input_top, text="商品 URL 输入",
+    tk.Label(input_top, text="商品 URL 输",
              font=("Arial", 13, "bold")).pack(side='left')
     tk.Button(input_top, text="查看进度 ▶", command=show_progress_page,
               font=("Arial", 12), padx=10, pady=3).pack(side='right')
@@ -1017,7 +950,7 @@ def run_app():
                        if l.strip().startswith(('http://', 'https://'))]
         if not valid_lines:
             return
-        # 追加到输入框（末尾换行后插入）
+        # 追加到输框（末尾换行后插）
         current = text_area.get('1.0', 'end-1c')
         if current and not current.endswith('\n'):
             text_area.insert('end', '\n')
@@ -1040,7 +973,7 @@ def run_app():
     tk.Button(btn_row, text="开始抓取 ▶", command=on_submit,
               font=("Arial", 13, "bold"), padx=14, pady=4).pack(side='left', padx=10)
 
-    # ── 工具按钮行 ──
+    # ── 工按钮行 ──
     tool_row = tk.Frame(input_frame)
     tool_row.pack(pady=(0, 6))
     tk.Button(tool_row, text="🏷  图片增加英文标题",
@@ -1085,7 +1018,7 @@ def run_app():
     # ════════════════════════════════════════════════
     top_bar = tk.Frame(progress_frame)
     top_bar.pack(fill='x', padx=10, pady=6)
-    tk.Button(top_bar, text="◀ 返回输入", command=show_input_page,
+    tk.Button(top_bar, text="◀ 返回输", command=show_input_page,
               font=("Arial", 12), padx=10, pady=3).pack(side='left')
     tk.Label(top_bar, text="下载进度信息（可直接复制）",
              font=("Arial", 13, "bold")).pack(side='left', padx=16)
@@ -1125,9 +1058,9 @@ def run_app():
         top.transient(root)
         top.grab_set()
 
-        tk.Label(top, text="请勾选需要下载的图片（默认全选）：", font=("Arial", 12, "bold")).pack(side="top", pady=10)
+        tk.Label(top, text="请勾选需要下载的图片（默认选）：", font=("Arial", 12, "bold")).pack(side="top", pady=10)
 
-        # 底部按钮区优先放到最下面，防止被其它元素挤出屏幕
+        # 底部按钮区优放到最下面，防止被它素挤出屏幕
         btn_frame = tk.Frame(top)
         btn_frame.pack(side="bottom", pady=10)
 
@@ -1159,7 +1092,7 @@ def run_app():
                 pass
 
         def bind_wheel_recursive(widget):
-            """递归绑定到每个子控件（兼容 Tk 9.0）"""
+            """递归绑定到每个子控件（容 Tk 9.0）"""
             widget.bind("<<ScrollWheel>>", on_mousewheel)
             for child in widget.winfo_children():
                 bind_wheel_recursive(child)
@@ -1210,7 +1143,7 @@ def run_app():
                 idx = current_idx[0]
                 is_sel = vars_dict[idx].get()
                 status = "✅ 已选" if is_sel else "❌ 未选"
-                ft.title(f"{status} | [{candidates[idx]['group']}] 查看大图 - 方向键切换，空格选中，ESC关闭")
+                ft.title(f"{status} | [{candidates[idx]['group']}] 查看大图 - 方向键切换，空格选中，ESC闭")
                 
             def on_left(e): load_image(current_idx[0] - 1)
             def on_right(e): load_image(current_idx[0] + 1)
@@ -1299,7 +1232,7 @@ def run_app():
             top.destroy()
             event.set()
 
-        tk.Button(btn_frame, text="全选", command=on_select_all, width=10).pack(side="left", padx=10)
+        tk.Button(btn_frame, text="选", command=on_select_all, width=10).pack(side="left", padx=10)
         tk.Button(btn_frame, text="反选", command=on_invert, width=10).pack(side="left", padx=10)
         tk.Button(btn_frame, text="确定下载", command=on_confirm, width=15, bg="#4CAF50", fg="black").pack(side="left", padx=10)
         tk.Button(btn_frame, text="终止下载", command=on_abort, width=15, bg="#f44336", fg="black").pack(side="left", padx=10)
@@ -1353,7 +1286,7 @@ def run_app():
     root.mainloop()
 
 
-# ─── 入口 ─────────────────────────────────────────────────────
+# ─── 口 ─────────────────────────────────────────────────────
 if __name__ == "__main__":
     app_logger.start()
     try:
