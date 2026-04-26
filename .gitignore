@@ -3,4 +3,5 @@ chrome_user_data/
 __pycache__/
 *.log
 .DS_Store
-urls_history.txtconfig.json
+urls_history.txt
+config.json

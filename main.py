@@ -128,6 +128,7 @@ class TaobaoScraper:
         downloads_dir = os.path.join(str(Path.home()), 'Downloads', 'Taobao_Data')
         os.makedirs(downloads_dir, exist_ok=True)
         self.base_dir = downloads_dir
+        self.has_sku_downloaded = False
 
     def log(self, msg):
         self.log_queue.put(msg)
@@ -390,6 +391,7 @@ class TaobaoScraper:
                         with open(os.path.join(sku_dir, "sku_names.txt"), "w", encoding="utf-8") as f:
                             f.write(",\n".join(sku_entries))
                         self.log(f"    [+] 规格清单保存: images/sku/sku_names.txt")
+                        self.has_sku_downloaded = True
 
                 else:
                     self.log(f"  [放弃] 您没有选择任何内容。")
@@ -619,12 +621,31 @@ class ImageLabelWindow:
         self.win.title("图片增加英文标题")
         self.win.geometry("900x850")
         self.win.resizable(True, True)
-        self.file_path = tk.StringVar()
+        self.file_path = tk.StringVar(value=self._find_latest_sku_txt())
         self.main_container = tk.Frame(self.win)
         self.main_container.pack(fill="both", expand=True)
         self.preview_win = None 
         self.preview_label = None
         self._build_ui()
+
+    def _find_latest_sku_txt(self):
+        """扫描 ~/Downloads/Taobao_Data 下所有子目录，返回最近修改的 sku_names.txt 路径"""
+        base = os.path.join(str(Path.home()), 'Downloads', 'Taobao_Data')
+        latest_path = ""
+        latest_mtime = 0
+        if os.path.isdir(base):
+            for root, dirs, files in os.walk(base):
+                if 'sku_names.txt' in files:
+                    p = os.path.join(root, 'sku_names.txt')
+                    try:
+                        mt = os.path.getmtime(p)
+                        if mt > latest_mtime:
+                            latest_mtime = mt
+                            latest_path = p
+                    except Exception:
+                        pass
+        return latest_path
+
 
     def _build_ui(self):
         for w in self.main_container.winfo_children(): w.destroy()
@@ -760,11 +781,11 @@ class ImageLabelWindow:
         for i, (name_zh, filename, name_en) in enumerate(entries, start=1):
             sv = tk.BooleanVar(value=False)
             tk.Checkbutton(scrollable_content, variable=sv).grid(row=i, column=0)
-            tk.Button(scrollable_content, text="🖼️", command=lambda f=filename: self._show_preview(f, base_dir), relief="flat").grid(row=i, column=1)
             ze = tk.Entry(scrollable_content, font=("Arial", 11))
             ze.insert(0, name_zh); ze.grid(row=i, column=2, sticky="ew", padx=2, pady=2)
             ee = tk.Entry(scrollable_content, font=("Arial", 11))
             ee.insert(0, name_en); ee.grid(row=i, column=3, sticky="ew", padx=2, pady=2)
+            tk.Button(scrollable_content, text="🖼️", command=lambda f=filename, e=ee: self._show_preview(f, base_dir, e), relief="flat").grid(row=i, column=1)
             tk.Button(scrollable_content, text="翻译", command=lambda z=ze, e=ee: self._single_trans(z, e)).grid(row=i, column=4, padx=2)
             self.edit_data.append((sv, ze, ee, filename))
 
@@ -780,12 +801,19 @@ class ImageLabelWindow:
             with open(txt_path, "w", encoding="utf-8") as f: f.write(",\n".join(lines))
             messagebox.showinfo("成功", "保存成功", parent=self.win)
         except Exception as e: messagebox.showerror("错误", str(e), parent=self.win)
-    def _show_preview(self, fname, base_dir):
+    def _show_preview(self, fname, base_dir, en_entry):
         img_path = os.path.join(base_dir, fname)
         if not os.path.exists(img_path): return
+        en_text = en_entry.get().strip()
+        if en_text in ("正在翻译...", "翻译失败"): en_text = ""
+        
         try:
             from PIL import Image, ImageTk
-            img = Image.open(img_path)
+            if en_text:
+                img = self._generate_labeled_image(img_path, en_text)
+            else:
+                img = Image.open(img_path)
+            
             img.thumbnail((600, 800))
             tk_img = ImageTk.PhotoImage(img)
             if not self.preview_win or not self.preview_win.winfo_exists():
@@ -797,6 +825,35 @@ class ImageLabelWindow:
             self.preview_label.config(image=tk_img); self.preview_label.image = tk_img
             self.preview_win.title(f"预览: {fname}")
         except: pass
+
+    def _generate_labeled_image(self, img_path, text):
+        from PIL import Image, ImageDraw, ImageFont, ImageStat
+        img = Image.open(img_path).convert("RGB")
+        w, h = img.size
+        band_h = max(int(h * 0.09), 30)
+        sample = img.crop((0, max(0, h - int(h * 0.2)), w, h))
+        avg = tuple(int(c) for c in ImageStat.Stat(sample).mean[:3])
+        new_img = Image.new("RGB", (w, h + band_h), tuple(max(0, c - 25) for c in avg))
+        new_img.paste(img, (0, 0))
+        draw = ImageDraw.Draw(new_img)
+        lum = 0.299 * avg[0] + 0.587 * avg[1] + 0.114 * avg[2]
+        color = (30, 30, 30) if lum > 128 else (240, 240, 240)
+        f_size = max(int(band_h * 0.55), 14)
+        def get_f(s):
+            for fp in ["/System/Library/Fonts/Helvetica.ttc", "/System/Library/Fonts/Arial.ttf", "/Library/Fonts/Arial.ttf"]:
+                try: return ImageFont.truetype(fp, s)
+                except: continue
+            return ImageFont.load_default()
+        font = get_f(f_size)
+        bbox = draw.textbbox((0, 0), text, font=font)
+        tw = bbox[2] - bbox[0]
+        if tw > w * 0.95:
+            f_size = max(int(f_size * (w * 0.95 / tw)), 8)
+            font = get_f(f_size)
+            bbox = draw.textbbox((0, 0), text, font=font)
+            tw = bbox[2] - bbox[0]
+        draw.text(((w - tw) / 2, h + (band_h - (bbox[3]-bbox[1])) / 2 - bbox[1]), text, fill=color, font=font)
+        return new_img
 
     def _single_trans(self, ze, ee):
         zh = ze.get().strip()
@@ -852,33 +909,10 @@ class ImageLabelWindow:
         except: return [None] * len(names)
 
     def _add_label(self, img_path, text):
-        from PIL import Image, ImageDraw, ImageFont, ImageStat
-        img = Image.open(img_path).convert("RGB")
-        w, h = img.size
-        band_h = max(int(h * 0.09), 30)
-        sample = img.crop((0, max(0, h - int(h * 0.2)), w, h))
-        avg = tuple(int(c) for c in ImageStat.Stat(sample).mean[:3])
-        new_img = Image.new("RGB", (w, h + band_h), tuple(max(0, c - 25) for c in avg))
-        new_img.paste(img, (0, 0))
-        draw = ImageDraw.Draw(new_img)
-        lum = 0.299 * avg[0] + 0.587 * avg[1] + 0.114 * avg[2]
-        color = (30, 30, 30) if lum > 128 else (240, 240, 240)
-        f_size = max(int(band_h * 0.55), 14)
-        def get_f(s):
-            for fp in ["/System/Library/Fonts/Helvetica.ttc", "/System/Library/Fonts/Arial.ttf", "/Library/Fonts/Arial.ttf"]:
-                try: return ImageFont.truetype(fp, s)
-                except: continue
-            return ImageFont.load_default()
-        font = get_f(f_size)
-        bbox = draw.textbbox((0, 0), text, font=font)
-        tw = bbox[2] - bbox[0]
-        if tw > w * 0.95:
-            f_size = max(int(f_size * (w * 0.95 / tw)), 8)
-            font = get_f(f_size)
-            bbox = draw.textbbox((0, 0), text, font=font)
-            tw = bbox[2] - bbox[0]
-        draw.text(((w - tw) / 2, h + (band_h - (bbox[3]-bbox[1])) / 2 - bbox[1]), text, fill=color, font=font)
-        new_img.save(img_path.replace(".jpg", "_en.jpg") if "_en" not in img_path else img_path, "JPEG", quality=95)
+        try:
+            new_img = self._generate_labeled_image(img_path, text)
+            new_img.save(img_path.replace(".jpg", "_en.jpg") if "_en" not in img_path else img_path, "JPEG", quality=95)
+        except: pass
 def run_app():
     global _HAS_DND
     root = tk.Tk()
@@ -932,6 +966,7 @@ def run_app():
         log_box.configure(state='disabled')
         status_var.set("正在初始化...")
         show_progress_page()
+        done_btn_frame.pack_forget()   # 隐藏上次残留的按钮
         # 启动爬虫线程
         t = threading.Thread(target=lambda: run_scraper(urls), daemon=True)
         t.start()
@@ -1033,6 +1068,17 @@ def run_app():
     status_var = tk.StringVar(value="")
     tk.Label(progress_frame, textvariable=status_var,
              font=("Arial", 11), fg="#555").pack(pady=5)
+
+    # 抓取完成后才显示的快捷按钮区（初始隐藏）
+    done_btn_frame = tk.Frame(progress_frame)
+    done_btn = tk.Button(
+        done_btn_frame,
+        text="🏷  写英文标题 ▶",
+        command=lambda: ImageLabelWindow(root),
+        font=("Arial", 13, "bold"), padx=18, pady=6,
+        bg="#2255cc", fg="white", relief="raised", cursor="hand2"
+    )
+    done_btn.pack(pady=4)
 
     # ── 日志轮询 ──────────────────────────────────────
     # 链接样式标签（只创建一次）
@@ -1253,6 +1299,9 @@ def run_app():
                     elif msg[0] == "SHOW_TOP_DIALOG":
                         messagebox.showwarning(msg[1], msg[2], parent=root)
                         msg[3].set()
+                    elif msg[0] == "SCRAPE_DONE":
+                        if len(msg) > 1 and msg[1]:
+                            done_btn_frame.pack(pady=(0, 8))
                     continue
                 
                 log_box.configure(state='normal')
@@ -1280,6 +1329,7 @@ def run_app():
     def run_scraper(urls):
         scraper = TaobaoScraper(urls, log_queue)
         scraper.run()
+        log_queue.put(("SCRAPE_DONE", scraper.has_sku_downloaded))
 
     root.after(150, poll_queue)
     show_input_page()
